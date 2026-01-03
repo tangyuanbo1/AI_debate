@@ -1,15 +1,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import ReactMarkdown from 'react-markdown'; // Note: In a real env, ensure this package is available. Since we can't add packages, we will render simple text or simple parsing. 
-// Actually, for this strict XML constraint without package.json modification capabilities, I will write a simple renderer or just display pre-formatted text.
-// Wait, the prompt says "Treat the current directory as the project root... If the user is asking you to make changes... satisfy their request".
-// It doesn't strictly forbid adding imports if I assume the environment supports it (like esm.sh in index.html). 
-// However, to be safe and robust without external deps failure, I will implement a simple display or raw whitespace preservation.
-// Better yet, I will update index.html to include a markdown parser if I really need it, or just style the text with whitespace-pre-wrap which works well for markdown-like text.
+import ReactMarkdown from 'react-markdown'; 
 
 import { STUDENT_TEAM, AI_TEAM, DEBATE_SEQUENCE } from './constants';
 import { DebateSession, Argument, DebateSide } from './types';
-import { generateDebateResponse, generateJudgeVerdict } from './services/geminiService';
+import { generateDebateResponseStream, generateJudgeVerdict } from './services/geminiService';
 import DebaterCard from './components/DebaterCard';
 
 const App: React.FC = () => {
@@ -80,32 +75,64 @@ const App: React.FC = () => {
   const triggerAi = async (turnIndex: number, currentHistory: Argument[]) => {
     setIsAiThinking(true);
     const step = DEBATE_SEQUENCE[turnIndex];
-    const response = await generateDebateResponse(
-      session.topic,
-      step.debater.role,
-      DebateSide.CON,
-      currentHistory
-    );
+    
+    try {
+      const streamResponse = await generateDebateResponseStream(
+        session.topic,
+        step.debater.role,
+        DebateSide.CON,
+        currentHistory
+      );
 
-    const aiArg: Argument = {
-      id: Math.random().toString(36).substr(2, 9),
-      speakerId: step.debater.id,
-      speakerName: step.debater.name,
-      side: DebateSide.CON,
-      text: response,
-      timestamp: Date.now(),
-    };
+      const aiArgId = Math.random().toString(36).substr(2, 9);
+      let fullText = "";
+      let isFirstChunk = true;
 
-    setIsAiThinking(false);
-    setSession(prev => {
-      const updatedHistory = [...prev.history, aiArg];
-      const nextTurn = prev.currentTurn + 1;
-      return {
+      for await (const chunk of streamResponse) {
+        const text = chunk.text;
+        if (text) {
+          fullText += text;
+          
+          if (isFirstChunk) {
+            setIsAiThinking(false); // Stop thinking animation, show bubble
+            // Initialize the AI argument in the history
+            const aiArg: Argument = {
+              id: aiArgId,
+              speakerId: step.debater.id,
+              speakerName: step.debater.name,
+              side: DebateSide.CON,
+              text: fullText, 
+              timestamp: Date.now(),
+            };
+            
+            setSession(prev => ({
+              ...prev,
+              history: [...prev.history, aiArg]
+            }));
+            isFirstChunk = false;
+          } else {
+            // Update the existing argument with new text
+            setSession(prev => ({
+              ...prev,
+              history: prev.history.map(arg => 
+                arg.id === aiArgId ? { ...arg, text: fullText } : arg
+              )
+            }));
+          }
+        }
+      }
+
+      // Advance turn after stream completes
+      setSession(prev => ({
         ...prev,
-        history: updatedHistory,
-        currentTurn: nextTurn,
-      };
-    });
+        currentTurn: prev.currentTurn + 1,
+      }));
+
+    } catch (error) {
+      console.error("AI Generation Error", error);
+      setIsAiThinking(false);
+      // Optional: Add a system message or error bubble here
+    }
   };
 
   const handleCallJudge = async () => {
@@ -256,7 +283,7 @@ const App: React.FC = () => {
                 <div className={`max-w-[80%] rounded-2xl p-5 ${
                   arg.side === DebateSide.PRO 
                     ? 'bg-blue-900/20 border-l-4 border-blue-500 rounded-tl-none' 
-                    : 'bg-red-900/20 border-r-4 border-red-500 rounded-tr-none' // Removed text-right
+                    : 'bg-red-900/20 border-r-4 border-red-500 rounded-tr-none' 
                 }`}>
                   <div className={`flex items-center gap-2 mb-2 text-xs font-bold text-slate-400 uppercase tracking-tighter ${
                       arg.side === DebateSide.CON ? 'justify-end' : ''

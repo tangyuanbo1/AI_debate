@@ -5,7 +5,7 @@ import { SpeakerRole, DebateSide, Argument } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export async function generateDebateResponse(
+export async function generateDebateResponseStream(
   topic: string,
   role: SpeakerRole,
   side: DebateSide,
@@ -29,21 +29,14 @@ export async function generateDebateResponse(
     Do not use meta-talk. Just provide the speech.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
-      config: {
-        temperature: 0.8,
-        topP: 0.9,
-      }
-    });
-
-    return response.text || "I am speechless at the strength of the opposing argument... (Error in AI response)";
-  } catch (error) {
-    console.error("Gemini Error:", error);
-    return "Error connecting to the debate intelligence. Please retry.";
-  }
+  return await ai.models.generateContentStream({
+    model: 'gemini-3-flash-preview',
+    contents: prompt,
+    config: {
+      temperature: 0.8,
+      topP: 0.9,
+    }
+  });
 }
 
 export async function generateJudgeVerdict(topic: string, history: Argument[]) {
@@ -59,35 +52,37 @@ export async function generateJudgeVerdict(topic: string, history: Argument[]) {
     ${historyText}
 
     Your Task:
-    Evaluate the debate fairly and strictly. You must decide who won based on logic, rhetoric, and rebuttal effectiveness.
+    Evaluate the debate fairly and strictly based on logic, rhetoric, and rebuttal effectiveness.
+    
+    **IMPORTANT: Please output the entire verdict in Simplified Chinese (简体中文).**
     
     Output Format (Use Markdown):
     
-    ## 🏆 Verdict: [Team Name] Wins
+    ## 🏆 判决结果: [获胜方队伍名称]
     
-    ### 🌟 Star Debater (Who spoke best)
-    **Name:** [Name]
-    **Reasoning:** [Why were they the best? specific examples]
+    ### 🌟 全场最佳辩手 (MVP)
+    **姓名:** [姓名]
+    **理由:** [为什么他是最好的？请举例说明]
 
-    ### 📉 Needs Improvement (Who spoke poorly)
-    **Name:** [Name]
-    **Reasoning:** [What logic was flawed or missed? specific examples]
+    ### 📉 待改进之处 (需努力)
+    **姓名:** [姓名]
+    **理由:** [逻辑漏洞或错失的机会]
 
-    ### ⚖️ Final Analysis
-    [A concise summary of why the winning team prevailed over the other.]
+    ### ⚖️ 最终深度分析
+    [详细分析为什么获胜方赢得了辩论，总结双方的关键交锋点。]
   `;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', // Using a smarter model context for judging if available, but flash is good for speed
+      model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
-        temperature: 0.7, // Slightly lower temperature for a more analytical judge
+        temperature: 0.7,
       }
     });
     return response.text;
   } catch (error) {
     console.error("Judge Error:", error);
-    return "## ⚖️ Procedural Error\nThe judicial council could not reach a verdict due to a connection issue.";
+    return "## ⚖️ 程序错误\n由于连接问题，司法委员会无法达成判决。";
   }
 }
