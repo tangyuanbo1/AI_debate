@@ -73,8 +73,9 @@ export async function generateJudgeVerdict(topic: string, history: Argument[]) {
   `;
 
   try {
+    // Upgraded to Pro model for complex reasoning tasks like judging
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-3-pro-preview',
       contents: prompt,
       config: {
         temperature: 0.7,
@@ -84,5 +85,31 @@ export async function generateJudgeVerdict(topic: string, history: Argument[]) {
   } catch (error) {
     console.error("Judge Error:", error);
     return "## ⚖️ 程序错误\n由于连接问题，司法委员会无法达成判决。";
+  }
+}
+
+export async function transcribeAudio(base64Audio: string, mimeType: string): Promise<string> {
+  // Switched to gemini-2.0-flash-exp which is widely available and excellent for audio
+  const model = 'gemini-2.0-flash-exp';
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: {
+        parts: [
+          {
+             inlineData: {
+               mimeType: mimeType,
+               data: base64Audio
+             }
+          },
+          { text: "Please transcribe the following audio into Simplified Chinese text exactly as spoken. Return ONLY the text, no other commentary." }
+        ]
+      }
+    });
+    return response.text || "";
+  } catch (error) {
+    console.error("Transcription Error:", error);
+    throw error;
   }
 }

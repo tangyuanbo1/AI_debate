@@ -1,5 +1,7 @@
 {
   "name": "Gemini Debate Arena",
   "description": "An immersive classroom debate platform where a team of three students competes against three distinct AI personas (First, Second, and Third speakers). Features real-time turn tracking, AI reasoning, and a high-stakes debating interface.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }

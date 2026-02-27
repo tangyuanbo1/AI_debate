@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 
 import { STUDENT_TEAM, AI_TEAM, DEBATE_SEQUENCE } from './constants';
 import { DebateSession, Argument, DebateSide } from './types';
-import { generateDebateResponseStream, generateJudgeVerdict } from './services/geminiService';
+import { generateDebateResponseStream, generateJudgeVerdict, transcribeAudio } from './services/geminiService';
 import DebaterCard from './components/DebaterCard';
 
 const App: React.FC = () => {
@@ -17,6 +17,12 @@ const App: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const [isAiThinking, setIsAiThinking] = useState(false);
   
+  // Voice Input State
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
   // Judge State
   const [judgeVerdict, setJudgeVerdict] = useState<string | null>(null);
   const [isJudgeThinking, setIsJudgeThinking] = useState(false);
@@ -42,6 +48,77 @@ const App: React.FC = () => {
       setSession(prev => ({ ...prev, isStarted: true }));
     }
   };
+
+  // --- New Voice Input Logic (Gemini API) ---
+  const toggleRecording = async () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      await startRecording();
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
+      
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        await processAudio(audioBlob, mimeType);
+        
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Error accessing microphone:", err);
+      alert("无法访问麦克风，请检查权限设置。(Cannot access microphone)");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const processAudio = async (audioBlob: Blob, mimeType: string) => {
+    setIsTranscribing(true);
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(audioBlob);
+      reader.onloadend = async () => {
+        const base64String = reader.result as string;
+        // Remove the data URL prefix (e.g., "data:audio/webm;base64,")
+        const base64Audio = base64String.split(',')[1];
+        
+        const transcript = await transcribeAudio(base64Audio, mimeType);
+        if (transcript) {
+          setInputText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        }
+        setIsTranscribing(false);
+      };
+    } catch (error) {
+      console.error("Transcribing failed", error);
+      setIsTranscribing(false);
+      alert("语音转写失败，请重试。(Transcription failed)");
+    }
+  };
+  // -------------------------
 
   const currentStep = DEBATE_SEQUENCE[session.currentTurn];
   const isStudentTurn = !currentStep?.debater.isAI;
@@ -395,14 +472,54 @@ const App: React.FC = () => {
                       onChange={(e) => setInputText(e.target.value)}
                       placeholder={`Enter argument as ${currentStep.debater.name}...`}
                       className="w-full bg-slate-800 border-2 border-blue-500/30 focus:border-blue-500 rounded-2xl py-4 px-6 pr-24 outline-none text-white resize-none h-24 transition-all"
+                      disabled={isRecording || isTranscribing}
                     />
+                    
+                    {/* Microphone / Voice Input Trigger */}
+                    <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={toggleRecording}
+                        disabled={isTranscribing}
+                        className={`p-2 rounded-full transition-all duration-300 flex items-center justify-center ${
+                          isRecording 
+                            ? 'bg-red-500 text-white ring-4 ring-red-500/30 animate-pulse' 
+                            : isTranscribing
+                                ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white'
+                        }`}
+                        title={isRecording ? "Stop recording" : "Click to record voice"}
+                      >
+                         {isRecording ? (
+                           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                             <rect x="6" y="6" width="12" height="12" rx="1" />
+                           </svg>
+                         ) : isTranscribing ? (
+                            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                         ) : (
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                            </svg>
+                         )}
+                      </button>
+                      
+                      {(isRecording || isTranscribing) && (
+                         <span className="text-xs font-bold text-slate-400 animate-pulse">
+                            {isRecording ? "Recording..." : "Transcribing..."}
+                         </span>
+                      )}
+                    </div>
+
                     <div className="absolute bottom-4 right-4 text-xs text-slate-500">
                       Markdown supported
                     </div>
                   </div>
                   <button
                     onClick={() => submitArgument(inputText)}
-                    disabled={!inputText.trim()}
+                    disabled={!inputText.trim() || isRecording || isTranscribing}
                     className="px-10 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-900/20 active:scale-95 flex items-center justify-center gap-2"
                   >
                     Send Argument
