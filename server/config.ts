@@ -17,10 +17,20 @@ function loadLocalSecrets(): Secrets {
 }
 
 const localSecrets = loadLocalSecrets();
+const secretsPath = serverPath('secrets.json');
+const secretsExists = fs.existsSync(secretsPath);
 
 function getSecret(name: string): string {
   // 按你的要求：只从 server/secrets.json 读取（不再读取任何环境变量/.env）
   return localSecrets[name] ?? '';
+}
+
+export function getSecretsMeta() {
+  return {
+    path: secretsPath,
+    exists: secretsExists,
+    keys: Object.keys(localSecrets).sort(),
+  };
 }
 
 export const config = {

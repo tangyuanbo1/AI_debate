@@ -1,7 +1,7 @@
 import cors from 'cors';
 import express from 'express';
 
-import { config as appConfig } from './config.js';
+import { config as appConfig, getSecretsMeta } from './config.js';
 import {
   dashscopeTextGenUrl,
   extractTextFromDashScopePayload,
@@ -146,6 +146,7 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     dashscopeKeyConfigured: Boolean(globalConfig.dashscopeApiKey),
     kbRootDir: kbRootDir(),
+    secrets: getSecretsMeta(),
   });
 });
 
