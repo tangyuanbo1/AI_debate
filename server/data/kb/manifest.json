@@ -21,9 +21,12 @@
       "docId": "0c3ba54d238f24b3a0f13643",
       "filename": "ãæµ·æ´æµ®æ¸¸çç©å­¦ã_10199588.pdf",
       "type": "pdf",
-      "status": "uploaded",
+      "status": "converting",
       "createdAt": 1772629970241,
-      "updatedAt": 1772629970241
+      "updatedAt": 1772630412656,
+      "ocrJobId": "ocrjob-ff6af18fe09ac78",
+      "ocrState": "pending",
+      "ocrErrorMsg": ""
     }
   ]
 }
