@@ -113,6 +113,66 @@ const App: React.FC = () => {
     history: [],
     isStarted: false,
   });
+
+  // Knowledge Base (minimal UI)
+  const [kbEnabled, setKbEnabled] = useState<boolean>(() => window.localStorage.getItem('kbEnabled') === 'true');
+  const [kbDocs, setKbDocs] = useState<Array<{ docId: string; filename: string; type: string; status: string }>>([]);
+  const [kbSelectedDocIds, setKbSelectedDocIds] = useState<string[]>(() => {
+    try {
+      const raw = window.localStorage.getItem('kbSelectedDocIds');
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem('kbEnabled', String(kbEnabled));
+  }, [kbEnabled]);
+
+  useEffect(() => {
+    window.localStorage.setItem('kbSelectedDocIds', JSON.stringify(kbSelectedDocIds));
+  }, [kbSelectedDocIds]);
+
+  const refreshKbDocs = async () => {
+    try {
+      const resp = await fetch('/api/kb/docs');
+      const json = (await resp.json()) as { docs?: any[] };
+      setKbDocs(Array.isArray(json.docs) ? json.docs : []);
+    } catch {
+      setKbDocs([]);
+    }
+  };
+
+  const startPdfOcr = async (docId: string) => {
+    const resp = await fetch(`/api/kb/docs/${docId}/ocr/start`, { method: 'POST' });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      throw new Error(`OCR start failed: ${resp.status} ${detail}`);
+    }
+    await refreshKbDocs();
+  };
+
+  const pollPdfOcr = async (docId: string) => {
+    const resp = await fetch(`/api/kb/docs/${docId}/ocr/status`);
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      throw new Error(`OCR status failed: ${resp.status} ${detail}`);
+    }
+    await refreshKbDocs();
+  };
+
+  const uploadKbFile = async (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    const resp = await fetch('/api/kb/upload', { method: 'POST', body: form });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      throw new Error(`Upload failed: ${resp.status} ${detail}`);
+    }
+    await refreshKbDocs();
+  };
   const [inputText, setInputText] = useState('');
   const [isAiThinking, setIsAiThinking] = useState(false);
   
@@ -282,7 +342,8 @@ const App: React.FC = () => {
         step.debater.role,
         DebateSide.CON,
         currentHistory,
-        lang
+        lang,
+        { enabled: kbEnabled, selectedDocIds: kbSelectedDocIds, topK: 8 }
       );
 
       const aiArgId = Math.random().toString(36).substr(2, 9);
@@ -338,7 +399,11 @@ const App: React.FC = () => {
 
   const handleCallJudge = async () => {
     setIsJudgeThinking(true);
-    const verdict = await generateJudgeVerdict(session.topic, session.history, lang);
+    const verdict = await generateJudgeVerdict(session.topic, session.history, lang, {
+      enabled: kbEnabled,
+      selectedDocIds: kbSelectedDocIds,
+      topK: 8,
+    });
     setJudgeVerdict(verdict || t('judgeUnavailable'));
     setIsJudgeThinking(false);
   };
@@ -379,6 +444,105 @@ const App: React.FC = () => {
           </div>
           
           <form onSubmit={handleStart} className="space-y-6">
+            <div className="bg-slate-900/40 border border-slate-700 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="font-bold text-slate-200">Knowledge Base</div>
+                <label className="flex items-center gap-2 text-sm text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={kbEnabled}
+                    onChange={(e) => setKbEnabled(e.target.checked)}
+                  />
+                  Enable
+                </label>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <input
+                  type="file"
+                  accept=".md,.markdown,.pdf"
+                  onChange={async (e) => {
+                    const input = e.currentTarget;
+                    const file = e.target.files?.[0];
+                    try {
+                      if (file) await uploadKbFile(file);
+                    } catch (err: any) {
+                      alert(err?.message || 'Upload failed');
+                    } finally {
+                      // 避免异步后 currentTarget 失效导致报错
+                      input.value = '';
+                    }
+                  }}
+                  className="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-bold file:bg-slate-700 file:text-white hover:file:bg-slate-600"
+                />
+                <button
+                  type="button"
+                  onClick={refreshKbDocs}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-bold border border-slate-600"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              <div className="space-y-2 max-h-40 overflow-auto pr-2">
+                {kbDocs.length === 0 ? (
+                  <div className="text-xs text-slate-500">No documents uploaded yet.</div>
+                ) : (
+                  kbDocs.map((d) => {
+                    const checked = kbSelectedDocIds.includes(d.docId);
+                    return (
+                      <label key={d.docId} className="flex items-center gap-2 text-sm text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setKbSelectedDocIds((prev) =>
+                              e.target.checked ? Array.from(new Set([...prev, d.docId])) : prev.filter((x) => x !== d.docId),
+                            );
+                          }}
+                        />
+                        <span className="truncate flex-1">{d.filename}</span>
+                        <span className="text-[10px] text-slate-500 uppercase">{d.type}</span>
+                        <span className="text-[10px] text-slate-500 uppercase">{d.status}</span>
+                        {d.type === 'pdf' && d.status !== 'converted' && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await startPdfOcr(d.docId);
+                                } catch (e: any) {
+                                  alert(e?.message || 'OCR start failed');
+                                }
+                              }}
+                              className="px-2 py-1 text-[10px] font-bold bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded"
+                              title="Run PaddleOCR and convert PDF to Markdown"
+                            >
+                              Convert
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await pollPdfOcr(d.docId);
+                                } catch (e: any) {
+                                  alert(e?.message || 'OCR status failed');
+                                }
+                              }}
+                              className="px-2 py-1 text-[10px] font-bold bg-slate-900/50 hover:bg-slate-700 border border-slate-700 rounded"
+                              title="Poll OCR status"
+                            >
+                              Poll
+                            </button>
+                          </div>
+                        )}
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-2">{t('debateTopicLabel')}</label>
               <textarea

@@ -3,11 +3,13 @@
  *
  * 部署时请通过环境变量注入：
  * - DASHSCOPE_API_KEY
+ * - PADDLEOCR_TOKEN
  * - (可选) DASHSCOPE_BASE_URL
  * - (可选) PORT
  */
 export const example = {
   DASHSCOPE_API_KEY: 'your_dashscope_api_key_here',
+  PADDLEOCR_TOKEN: 'your_paddleocr_token_here',
   DASHSCOPE_BASE_URL: 'https://dashscope.aliyuncs.com',
   PORT: 8787,
 };

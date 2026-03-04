@@ -40,7 +40,8 @@ export async function generateDebateResponseStream(
   role: SpeakerRole,
   side: DebateSide,
   history: Argument[],
-  lang: 'zh-CN' | 'en-US'
+  lang: 'zh-CN' | 'en-US',
+  kb?: { enabled?: boolean; selectedDocIds?: string[]; topK?: number }
 ) {
   const resp = await fetch("/api/debate/stream", {
     method: "POST",
@@ -53,6 +54,7 @@ export async function generateDebateResponseStream(
       side,
       history,
       lang,
+      kb,
     }),
   });
 
@@ -70,13 +72,18 @@ export async function generateDebateResponseStream(
   })();
 }
 
-export async function generateJudgeVerdict(topic: string, history: Argument[], lang: 'zh-CN' | 'en-US') {
+export async function generateJudgeVerdict(
+  topic: string,
+  history: Argument[],
+  lang: 'zh-CN' | 'en-US',
+  kb?: { enabled?: boolean; selectedDocIds?: string[]; topK?: number }
+) {
   const resp = await fetch("/api/judge", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ topic, history, lang }),
+    body: JSON.stringify({ topic, history, lang, kb }),
   });
 
   if (!resp.ok) {

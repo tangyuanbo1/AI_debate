@@ -9,12 +9,32 @@ import {
   makeTextGenerationRequestBody,
   type DashScopeMessage,
 } from './dashscope.js';
+import multer from 'multer';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {
+  addDoc,
+  ensureKbDirs,
+  kbDocDir,
+  kbRootDir,
+  readManifest,
+  newDocId,
+  type KbDocType,
+  updateDoc,
+} from './kb/store.js';
+import { grepWithIdfAndTableAwareness, formatContextsForDisplay } from './kb/grepRetrieval.js';
+import { llmDecideSearchToolArgs } from './kb/decision.js';
+import { llmExtractKeywords } from './kb/llmKeyword.js';
+import { downloadJsonl, getOcrJobStatus, parseJsonlToMarkdownPages, startOcrJobWithPdfBuffer } from './ocr/paddleOcrClient.js';
+import { config as globalConfig } from './config.js';
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
 const PORT = appConfig.port;
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: globalConfig.kb.uploadMaxBytes } });
 
 type DebateArgument = {
   id: string;
@@ -23,6 +43,12 @@ type DebateArgument = {
   side: 'PRO' | 'CON';
   text: string;
   timestamp: number;
+};
+
+type KbConfig = {
+  enabled?: boolean;
+  selectedDocIds?: string[];
+  topK?: number; // 默认 8
 };
 
 function instructionForRole(role: string): string {
@@ -71,12 +97,252 @@ Do not use meta-talk. Just provide the speech.
 `.trim();
 }
 
+async function buildKbContext(opts: {
+  query: string;
+  lang: 'zh-CN' | 'en-US';
+  kb?: KbConfig;
+}): Promise<string> {
+  if (!opts.kb?.enabled) return '';
+
+  const selectedDocIds = Array.isArray(opts.kb.selectedDocIds) ? opts.kb.selectedDocIds : [];
+  const targets = selectedDocIds.length ? selectedDocIds.map((id) => `docs/${id}`) : ['docs'];
+  const topK = typeof opts.kb.topK === 'number' ? opts.kb.topK : 8;
+
+  // 1) 决策阶段：生成 search_knowledge_base 工具参数（keywords+query 必需）
+  const toolArgs = await llmDecideSearchToolArgs({ userQuestion: opts.query, lang: opts.lang });
+  const initKeywords = toolArgs?.keywords?.length ? toolArgs.keywords : [];
+
+  // 2) 强制重提关键词（更具体）：失败则回退 initKeywords
+  const refined = await llmExtractKeywords({ query: opts.query, lang: opts.lang, minKeywords: 4 });
+  const finalKeywords = (refined?.length ? refined : initKeywords).slice(0, 12);
+
+  if (!finalKeywords.length) return '';
+
+  // 3) Grep + IDF + table awareness
+  const result = await grepWithIdfAndTableAwareness({
+    kbRootDir: kbRootDir(),
+    targetRelPaths: targets,
+    keywords: finalKeywords,
+    userQuestion: opts.query,
+    topMatches: topK,
+  });
+
+  if (!result.snippets.length) return '';
+
+  const formatted = formatContextsForDisplay(result.snippets);
+  if (!formatted) return '';
+
+  return opts.lang === 'zh-CN'
+    ? `\n\n【知识库检索上下文】（仅供参考；如使用请在回答中尽量引用片段的文件/行号信息）\n${formatted}\n`
+    : `\n\n[Knowledge Base Context] (for reference; if used, cite file/line info from snippets)\n${formatted}\n`;
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     dashscopeKeyConfigured: Boolean(process.env.DASHSCOPE_API_KEY),
   });
 });
+
+// ---------------------- Knowledge Base APIs ----------------------
+app.get('/api/kb/docs', async (_req, res) => {
+  const m = await readManifest();
+  res.json({ docs: m.docs });
+});
+
+app.post('/api/kb/upload', (req, res) => {
+  upload.single('file')(req, res, async (err: any) => {
+    if (err) {
+      if (err?.code === 'LIMIT_FILE_SIZE') {
+        res.status(413).json({ error: 'File too large', maxBytes: globalConfig.kb.uploadMaxBytes });
+        return;
+      }
+      res.status(400).json({ error: String(err?.message || err) });
+      return;
+    }
+
+    try {
+      await ensureKbDirs();
+      const f = (req as any).file as Express.Multer.File | undefined;
+      if (!f) {
+        res.status(400).json({ error: 'No file uploaded' });
+        return;
+      }
+
+      const ext = path.extname(f.originalname).toLowerCase();
+      const type: KbDocType = ext === '.pdf' ? 'pdf' : ext === '.md' || ext === '.markdown' ? 'md' : 'md';
+      if (type !== 'md' && type !== 'pdf') {
+        res.status(400).json({ error: 'Unsupported file type. Only .md and .pdf supported.' });
+        return;
+      }
+
+      const meta = await addDoc({
+        docId: newDocId(),
+        filename: f.originalname,
+        type,
+        status: 'uploaded',
+      });
+
+      const dir = kbDocDir(meta.docId);
+      await fs.mkdir(dir, { recursive: true });
+
+      if (type === 'md') {
+        await fs.writeFile(path.join(dir, 'content.md'), f.buffer);
+      } else {
+        await fs.writeFile(path.join(dir, 'source.pdf'), f.buffer);
+      }
+
+      res.json({ doc: meta });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Upload failed' });
+    }
+  });
+});
+
+app.post('/api/kb/docs/:docId/convert', async (req, res) => {
+  res.status(410).json({
+    error: 'Deprecated',
+    detail: '已替换为异步 OCR：POST /api/kb/docs/:docId/ocr/start 与 GET /api/kb/docs/:docId/ocr/status',
+  });
+});
+
+app.post('/api/kb/docs/:docId/ocr/start', async (req, res) => {
+  try {
+    const { docId } = req.params;
+    const m = await readManifest();
+    const doc = m.docs.find((d) => d.docId === docId);
+    if (!doc) {
+      res.status(404).json({ error: 'Doc not found' });
+      return;
+    }
+    if (doc.type !== 'pdf') {
+      res.status(400).json({ error: 'Only PDF can be OCR converted' });
+      return;
+    }
+
+    const pdfPath = path.join(kbDocDir(docId), 'source.pdf');
+    const pdf = await fs.readFile(pdfPath);
+
+    const started = await startOcrJobWithPdfBuffer({ filename: doc.filename, pdf });
+    await updateDoc(docId, { status: 'converting', ocrJobId: started.jobId, ocrState: 'pending', ocrErrorMsg: '' });
+
+    res.json({ jobId: started.jobId });
+  } catch (e: any) {
+    const msg = e?.message || 'OCR start failed';
+    // 缺少 token / 配置类问题给 400，避免误以为服务端崩了
+    if (String(msg).includes('Missing PADDLEOCR_TOKEN')) {
+      res.status(400).json({ error: msg });
+      return;
+    }
+    res.status(500).json({ error: msg });
+  }
+});
+
+app.get('/api/kb/docs/:docId/ocr/status', async (req, res) => {
+  try {
+    const { docId } = req.params;
+    const m = await readManifest();
+    const doc = m.docs.find((d) => d.docId === docId);
+    if (!doc) {
+      res.status(404).json({ error: 'Doc not found' });
+      return;
+    }
+    if (doc.type !== 'pdf') {
+      res.status(400).json({ error: 'Only PDF has OCR status' });
+      return;
+    }
+    if (!doc.ocrJobId) {
+      res.status(400).json({ error: 'OCR job not started' });
+      return;
+    }
+
+    const st = await getOcrJobStatus(doc.ocrJobId);
+    await updateDoc(docId, {
+      ocrState: st.state,
+      ocrErrorMsg: st.errorMsg ?? '',
+      status: st.state === 'failed' ? 'failed' : doc.status,
+    });
+
+    // done 且尚未生成 content.md：拉取 jsonl 并落盘
+    if (st.state === 'done' && st.resultJsonUrl) {
+      const docDir = kbDocDir(docId);
+      const contentMdPath = path.join(docDir, 'content.md');
+      const already = await fs.stat(contentMdPath).then(() => true).catch(() => false);
+      if (!already) {
+        const jsonl = await downloadJsonl(st.resultJsonUrl);
+        const pages = parseJsonlToMarkdownPages(jsonl);
+
+        // 保存图片与合并 markdown
+        let merged = '';
+        let pageNo = 1;
+        for (const p of pages) {
+          merged += `\n\n---\n\n## Page ${pageNo}\n\n`;
+          merged += p.markdown;
+
+          // markdown.images: path -> url
+          for (const [imgPath, url] of Object.entries(p.images ?? {})) {
+            const safeRel = imgPath.replaceAll('\\', '/');
+            const full = path.join(docDir, safeRel);
+            await fs.mkdir(path.dirname(full), { recursive: true });
+            const imgResp = await fetch(url);
+            if (imgResp.ok) {
+              const buf = Buffer.from(await imgResp.arrayBuffer());
+              await fs.writeFile(full, buf);
+            }
+          }
+          pageNo += 1;
+        }
+
+        await fs.writeFile(contentMdPath, merged.trim() + '\n', 'utf-8');
+        await updateDoc(docId, { status: 'converted' });
+      }
+    }
+
+    res.json({
+      state: st.state,
+      errorMsg: st.errorMsg,
+      extractProgress: st.extractProgress,
+      pollIntervalMs: globalConfig.paddleOcr.pollIntervalMs,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'OCR status failed' });
+  }
+});
+
+app.post('/api/kb/search', async (req, res) => {
+  try {
+    const { query, keywords, selectedDocIds, topK } = (req.body ?? {}) as {
+      query: string;
+      keywords: string[];
+      selectedDocIds?: string[];
+      topK?: number;
+    };
+    const kbRoot = kbRootDir();
+    const targets =
+      Array.isArray(selectedDocIds) && selectedDocIds.length
+        ? selectedDocIds.map((id) => `docs/${id}`)
+        : ['docs'];
+
+    const result = await grepWithIdfAndTableAwareness({
+      kbRootDir: kbRoot,
+      targetRelPaths: targets,
+      keywords: Array.isArray(keywords) ? keywords : [],
+      userQuestion: query ?? '',
+      topMatches: typeof topK === 'number' ? topK : 8,
+    });
+
+    res.json({
+      snippets: result.snippets,
+      idfWeights: result.idfWeights,
+      scannedFiles: result.scannedFiles,
+      matchedLines: result.matchedLines,
+      formatted: formatContextsForDisplay(result.snippets),
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Search failed' });
+  }
+});
+// ----------------------------------------------------------------
 
 // 流式辩论发言：返回 SSE，data: {"text":"..."}（增量片段）
 app.post('/api/debate/stream', async (req, res) => {
@@ -85,16 +351,26 @@ app.post('/api/debate/stream', async (req, res) => {
   try {
     const apiKey = getDashScopeApiKey();
 
-    const { topic, role, side, history, lang } = (req.body ?? {}) as {
+    const { topic, role, side, history, lang, kb } = (req.body ?? {}) as {
       topic: string;
       role: string;
       side: 'PRO' | 'CON';
       history: DebateArgument[];
       lang?: 'zh-CN' | 'en-US';
+      kb?: KbConfig;
     };
 
     const prompt = buildDebatePrompt(topic, role, side, Array.isArray(history) ? history : []);
     const targetLang = lang === 'en-US' ? 'en-US' : 'zh-CN';
+
+    // 针对本回合构造检索 query（尽量贴近“对方刚说了什么 + 当前任务”）
+    const last = Array.isArray(history) && history.length ? history[history.length - 1] : null;
+    const retrievalQuery =
+      last?.text?.trim()
+        ? `Topic: ${topic}\nOpponent last point: ${last.text}\nYour role: ${role}\nRespond now.`
+        : `Topic: ${topic}\nYour role: ${role}\nRespond now.`;
+
+    const kbContext = await buildKbContext({ query: retrievalQuery, lang: targetLang, kb });
 
     const messages: DashScopeMessage[] = [
       {
@@ -104,7 +380,7 @@ app.post('/api/debate/stream', async (req, res) => {
             ? '你是世界级辩手。请只输出辩词正文，不要输出任何解释。请使用简体中文。'
             : 'You are a world-class debater. Output ONLY the speech content. Use English.',
       },
-      { role: 'user', content: prompt },
+      { role: 'user', content: prompt + kbContext },
     ];
 
     const upstream = await fetch(dashscopeTextGenUrl(), {
@@ -198,6 +474,7 @@ app.post('/api/judge', async (req, res) => {
       .join('\n\n');
 
     const targetLang = lang === 'en-US' ? 'en-US' : 'zh-CN';
+    const kb = (req.body ?? {})?.kb as KbConfig | undefined;
 
     const promptZh = `
 你是“辩论竞技场”的首席法官。辩论已结束。
@@ -248,6 +525,11 @@ Evaluate strictly based on logic, rhetoric, and rebuttal effectiveness. Output M
 `.trim();
 
     const prompt = targetLang === 'zh-CN' ? promptZh : promptEn;
+    const kbContext = await buildKbContext({
+      query: `Topic: ${topic}\nJudge task: final verdict based on transcript.\nTranscript:\n${historyText}`,
+      lang: targetLang,
+      kb,
+    });
 
     const upstream = await fetch(dashscopeTextGenUrl(), {
       method: 'POST',
@@ -267,7 +549,7 @@ Evaluate strictly based on logic, rhetoric, and rebuttal effectiveness. Output M
                   ? '你是严谨且公正的辩论裁判。输出只包含判词内容。'
                   : 'You are a strict and fair debate judge. Output ONLY the verdict content.',
             },
-            { role: 'user', content: prompt },
+            { role: 'user', content: prompt + kbContext },
           ],
           temperature: 0.7,
           topP: 0.9,
