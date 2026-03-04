@@ -8,9 +8,9 @@ export const STUDENT_TEAM: Debater[] = [
 ];
 
 export const AI_TEAM: Debater[] = [
-  { id: 'a1', name: 'Gemini (Alpha)', role: SpeakerRole.FIRST, isAI: true, avatar: 'https://picsum.photos/seed/a1/100/100' },
-  { id: 'a2', name: 'Gemini (Beta)', role: SpeakerRole.SECOND, isAI: true, avatar: 'https://picsum.photos/seed/a2/100/100' },
-  { id: 'a3', name: 'Gemini (Gamma)', role: SpeakerRole.THIRD, isAI: true, avatar: 'https://picsum.photos/seed/a3/100/100' },
+  { id: 'a1', name: 'AI (Alpha)', role: SpeakerRole.FIRST, isAI: true, avatar: 'https://picsum.photos/seed/a1/100/100' },
+  { id: 'a2', name: 'AI (Beta)', role: SpeakerRole.SECOND, isAI: true, avatar: 'https://picsum.photos/seed/a2/100/100' },
+  { id: 'a3', name: 'AI (Gamma)', role: SpeakerRole.THIRD, isAI: true, avatar: 'https://picsum.photos/seed/a3/100/100' },
 ];
 
 export const DEBATE_SEQUENCE = [

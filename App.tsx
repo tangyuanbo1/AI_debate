@@ -1,13 +1,112 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown'; 
 
 import { STUDENT_TEAM, AI_TEAM, DEBATE_SEQUENCE } from './constants';
 import { DebateSession, Argument, DebateSide } from './types';
-import { generateDebateResponseStream, generateJudgeVerdict, transcribeAudio } from './services/geminiService';
+import { generateDebateResponseStream, generateJudgeVerdict, transcribeAudio } from './services/qwenService';
 import DebaterCard from './components/DebaterCard';
 
 const App: React.FC = () => {
+  type Language = 'zh-CN' | 'en-US';
+  const [lang, setLang] = useState<Language>(() => {
+    const saved = window.localStorage.getItem('lang');
+    return saved === 'en-US' || saved === 'zh-CN' ? saved : 'en-US';
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem('lang', lang);
+  }, [lang]);
+
+  const t = useMemo(() => {
+    const dict: Record<Language, Record<string, string>> = {
+      'zh-CN': {
+        appTitle: '课堂辩论',
+        appSubtitle: '人类 vs 人工智能',
+        debateTopicLabel: '辩题',
+        debateTopicPlaceholder: '例如：社交媒体平台是否应该为打击假新闻负责？',
+        teamHumans: '人类队（正方）',
+        teamAI: 'AI队（反方）',
+        opening: '开篇陈词',
+        rebuttal: '反驳',
+        conclusion: '总结',
+        enterArena: '进入辩论场',
+        status: '状态',
+        live: '进行中',
+        reset: '重置',
+        waitingOpening: '等待 {name} 的开篇陈词…',
+        debateConcluded: '辩论结束',
+        timeForJudgment: '双方陈词已完毕，现在进入裁决。',
+        callForVerdict: '请求判决',
+        judgeThinking: '首席法官正在审阅逐字稿…',
+        sessionClosed: '本场已结束',
+        verdictDelivered: '判决已发布。',
+        startNewDebate: '开始新辩题',
+        currentPhase: '当前阶段：',
+        turnOf: '回合 {cur}/{total}',
+        markdownSupported: '支持 Markdown',
+        sendArgument: '发送观点',
+        aiSynthesizing: '{name} 正在组织反驳…',
+        judgeUnavailable: '裁判暂不可用。',
+        micNoAccess: '无法访问麦克风，请检查权限设置。',
+        transcriptionFailed: '语音转写失败，请重试。',
+        stopRecording: '停止录音',
+        clickToRecord: '点击录音',
+        recording: '录音中…',
+        transcribing: '转写中…',
+        verdictTitle: '首席法官判词',
+        verdictSubtitle: '最终评估与评分',
+        debateArena: '辩论竞技场',
+      },
+      'en-US': {
+        appTitle: 'Classroom Debate',
+        appSubtitle: 'Humans vs. Artificial Intelligence',
+        debateTopicLabel: 'Debate Topic',
+        debateTopicPlaceholder: 'e.g., Should social media platforms be responsible for policing fake news?',
+        teamHumans: 'Team Humans (Pro)',
+        teamAI: 'Team AI (Con)',
+        opening: 'Opening',
+        rebuttal: 'Rebuttal',
+        conclusion: 'Conclusion',
+        enterArena: 'Enter the Arena',
+        status: 'Status',
+        live: 'Live',
+        reset: 'Reset',
+        waitingOpening: 'Waiting for the opening statement from {name}...',
+        debateConcluded: 'Debate Concluded',
+        timeForJudgment: 'The speakers have rested their cases. It is time for judgment.',
+        callForVerdict: 'Call for Verdict',
+        judgeThinking: 'The Chief Justice is reviewing the transcript...',
+        sessionClosed: 'Session Closed',
+        verdictDelivered: 'The verdict has been delivered.',
+        startNewDebate: 'Start New Debate',
+        currentPhase: 'Current Phase: ',
+        turnOf: 'Turn {cur} of {total}',
+        markdownSupported: 'Markdown supported',
+        sendArgument: 'Send Argument',
+        aiSynthesizing: '{name} is synthesizing counter-arguments...',
+        judgeUnavailable: 'Judge unavailable.',
+        micNoAccess: 'Cannot access microphone. Please check permissions.',
+        transcriptionFailed: 'Transcription failed. Please try again.',
+        stopRecording: 'Stop recording',
+        clickToRecord: 'Click to record voice',
+        recording: 'Recording...',
+        transcribing: 'Transcribing...',
+        verdictTitle: 'Chief Justice Verdict',
+        verdictSubtitle: 'Final Evaluation & Scoring',
+        debateArena: 'Debate Arena',
+      },
+    };
+
+    const tr = (key: string, vars?: Record<string, string | number>) => {
+      const template = dict[lang][key] ?? key;
+      if (!vars) return template;
+      return Object.keys(vars).reduce((acc, k) => acc.replaceAll(`{${k}}`, String(vars[k])), template);
+    };
+
+    return tr;
+  }, [lang]);
+
   const [session, setSession] = useState<DebateSession>({
     topic: '',
     currentTurn: 0,
@@ -29,6 +128,30 @@ const App: React.FC = () => {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const verdictRef = useRef<HTMLDivElement>(null);
+
+  const verdictMarkdownComponents = {
+    h2: ({ children }: { children: React.ReactNode }) => (
+      <h2 className="text-2xl font-black text-yellow-400 tracking-wide mb-4">{children}</h2>
+    ),
+    h3: ({ children }: { children: React.ReactNode }) => (
+      <h3 className="text-lg font-bold text-slate-100 mt-6 mb-2">{children}</h3>
+    ),
+    p: ({ children }: { children: React.ReactNode }) => (
+      <p className="text-slate-300 leading-relaxed mb-3 whitespace-pre-wrap">{children}</p>
+    ),
+    strong: ({ children }: { children: React.ReactNode }) => (
+      <strong className="text-slate-100 font-bold">{children}</strong>
+    ),
+    ul: ({ children }: { children: React.ReactNode }) => (
+      <ul className="list-disc pl-6 space-y-2 my-3">{children}</ul>
+    ),
+    ol: ({ children }: { children: React.ReactNode }) => (
+      <ol className="list-decimal pl-6 space-y-2 my-3">{children}</ol>
+    ),
+    li: ({ children }: { children: React.ReactNode }) => (
+      <li className="text-slate-300 leading-relaxed">{children}</li>
+    ),
+  } as const;
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -85,7 +208,7 @@ const App: React.FC = () => {
       setIsRecording(true);
     } catch (err) {
       console.error("Error accessing microphone:", err);
-      alert("无法访问麦克风，请检查权限设置。(Cannot access microphone)");
+      alert(t('micNoAccess'));
     }
   };
 
@@ -115,7 +238,7 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Transcribing failed", error);
       setIsTranscribing(false);
-      alert("语音转写失败，请重试。(Transcription failed)");
+      alert(t('transcriptionFailed'));
     }
   };
   // -------------------------
@@ -158,7 +281,8 @@ const App: React.FC = () => {
         session.topic,
         step.debater.role,
         DebateSide.CON,
-        currentHistory
+        currentHistory,
+        lang
       );
 
       const aiArgId = Math.random().toString(36).substr(2, 9);
@@ -214,8 +338,8 @@ const App: React.FC = () => {
 
   const handleCallJudge = async () => {
     setIsJudgeThinking(true);
-    const verdict = await generateJudgeVerdict(session.topic, session.history);
-    setJudgeVerdict(verdict || "Judge unavailable.");
+    const verdict = await generateJudgeVerdict(session.topic, session.history, lang);
+    setJudgeVerdict(verdict || t('judgeUnavailable'));
     setIsJudgeThinking(false);
   };
 
@@ -225,18 +349,42 @@ const App: React.FC = () => {
         <div className="max-w-2xl w-full space-y-8 bg-slate-800 p-10 rounded-3xl shadow-2xl border border-slate-700">
           <div className="text-center space-y-4">
             <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-              Classroom Debate
+              {t('appTitle')}
             </h1>
-            <p className="text-slate-400 text-lg">Humans vs. Artificial Intelligence</p>
+            <p className="text-slate-400 text-lg">{t('appSubtitle')}</p>
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setLang('zh-CN')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold border transition-colors ${
+                  lang === 'zh-CN'
+                    ? 'bg-slate-700 border-slate-500 text-white'
+                    : 'bg-slate-900/40 border-slate-700 text-slate-300 hover:bg-slate-700/40'
+                }`}
+              >
+                中文
+              </button>
+              <button
+                type="button"
+                onClick={() => setLang('en-US')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold border transition-colors ${
+                  lang === 'en-US'
+                    ? 'bg-slate-700 border-slate-500 text-white'
+                    : 'bg-slate-900/40 border-slate-700 text-slate-300 hover:bg-slate-700/40'
+                }`}
+              >
+                English
+              </button>
+            </div>
           </div>
           
           <form onSubmit={handleStart} className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Debate Topic</label>
+              <label className="block text-sm font-medium text-slate-300 mb-2">{t('debateTopicLabel')}</label>
               <textarea
                 value={session.topic}
                 onChange={(e) => setSession({ ...session, topic: e.target.value })}
-                placeholder="e.g., Should social media platforms be responsible for policing fake news?"
+                placeholder={t('debateTopicPlaceholder')}
                 className="w-full h-32 px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-white resize-none transition-all"
                 required
               />
@@ -244,19 +392,19 @@ const App: React.FC = () => {
             
             <div className="grid grid-cols-2 gap-4">
               <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-xl">
-                <p className="font-bold text-blue-400 mb-2">Team Humans (Pro)</p>
+                <p className="font-bold text-blue-400 mb-2">{t('teamHumans')}</p>
                 <ul className="text-xs text-blue-200/70 space-y-1">
-                  <li>• 1st: Opening</li>
-                  <li>• 2nd: Rebuttal</li>
-                  <li>• 3rd: Conclusion</li>
+                  <li>• 1st: {t('opening')}</li>
+                  <li>• 2nd: {t('rebuttal')}</li>
+                  <li>• 3rd: {t('conclusion')}</li>
                 </ul>
               </div>
               <div className="p-4 bg-red-900/20 border border-red-500/30 rounded-xl">
-                <p className="font-bold text-red-400 mb-2">Team Gemini (Con)</p>
+                <p className="font-bold text-red-400 mb-2">{t('teamAI')}</p>
                 <ul className="text-xs text-red-200/70 space-y-1">
-                  <li>• 1st: Opening</li>
-                  <li>• 2nd: Rebuttal</li>
-                  <li>• 3rd: Conclusion</li>
+                  <li>• 1st: {t('opening')}</li>
+                  <li>• 2nd: {t('rebuttal')}</li>
+                  <li>• 3rd: {t('conclusion')}</li>
                 </ul>
               </div>
             </div>
@@ -265,7 +413,7 @@ const App: React.FC = () => {
               type="submit"
               className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-900/20 active:scale-[0.98]"
             >
-              Enter the Arena
+              {t('enterArena')}
             </button>
           </form>
         </div>
@@ -282,23 +430,23 @@ const App: React.FC = () => {
         <div className="flex items-center gap-4">
           <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-xl italic shadow-inner">C</div>
           <div>
-            <h2 className="font-bold text-sm text-slate-400 uppercase tracking-widest">Debate Arena</h2>
+            <h2 className="font-bold text-sm text-slate-400 uppercase tracking-widest">{t('debateArena')}</h2>
             <p className="text-lg font-bold truncate max-w-md">{session.topic}</p>
           </div>
         </div>
         <div className="flex items-center gap-6">
             <div className="text-right">
-                <div className="text-[10px] text-slate-500 uppercase font-bold">Status</div>
+                <div className="text-[10px] text-slate-500 uppercase font-bold">{t('status')}</div>
                 <div className="text-sm font-bold text-emerald-400 flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    Live
+                    {t('live')}
                 </div>
             </div>
             <button 
                 onClick={() => window.location.reload()}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm font-bold border border-slate-700 transition-colors"
             >
-                Reset
+                {t('reset')}
             </button>
         </div>
       </header>
@@ -348,7 +496,7 @@ const App: React.FC = () => {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                     </svg>
                 </div>
-                <p className="text-lg">Waiting for the opening statement from {STUDENT_TEAM[0].name}...</p>
+                <p className="text-lg">{t('waitingOpening', { name: STUDENT_TEAM[0].name })}</p>
               </div>
             )}
             
@@ -396,12 +544,14 @@ const App: React.FC = () => {
                         <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-4 border-b border-yellow-600/30 flex items-center gap-3">
                             <div className="w-12 h-12 bg-yellow-600 rounded-full flex items-center justify-center text-slate-900 font-bold text-2xl shadow-lg">⚖️</div>
                             <div>
-                                <h3 className="text-yellow-500 font-bold text-lg uppercase tracking-widest">Chief Justice Verdict</h3>
-                                <p className="text-xs text-yellow-500/60">Final Evaluation & Scoring</p>
+                                <h3 className="text-yellow-500 font-bold text-lg uppercase tracking-widest">{t('verdictTitle')}</h3>
+                                <p className="text-xs text-yellow-500/60">{t('verdictSubtitle')}</p>
                             </div>
                         </div>
-                        <div className="p-8 text-slate-300 leading-relaxed font-light whitespace-pre-wrap">
-                            {judgeVerdict}
+                        <div className="p-8">
+                            <ReactMarkdown components={verdictMarkdownComponents}>
+                              {judgeVerdict}
+                            </ReactMarkdown>
                         </div>
                     </div>
                 </div>
@@ -417,14 +567,14 @@ const App: React.FC = () => {
             <div className="transition-all duration-500">
                 {!judgeVerdict && !isJudgeThinking && (
                     <div className="text-center p-8 bg-gradient-to-r from-slate-800 to-slate-800 border border-slate-700 rounded-2xl">
-                    <h3 className="text-2xl font-bold mb-2 text-white">Debate Concluded</h3>
-                    <p className="text-slate-400 mb-6 italic">The speakers have rested their cases. It is time for judgment.</p>
+                    <h3 className="text-2xl font-bold mb-2 text-white">{t('debateConcluded')}</h3>
+                    <p className="text-slate-400 mb-6 italic">{t('timeForJudgment')}</p>
                     <div className="flex justify-center gap-4">
                         <button 
                             onClick={handleCallJudge}
                             className="px-8 py-4 bg-yellow-600 hover:bg-yellow-500 text-slate-900 font-bold rounded-xl transition-all shadow-lg shadow-yellow-900/20 active:scale-[0.98] flex items-center gap-2 text-lg"
                         >
-                            <span className="text-xl">⚖️</span> Call for Verdict
+                            <span className="text-xl">⚖️</span> {t('callForVerdict')}
                         </button>
                     </div>
                     </div>
@@ -433,21 +583,21 @@ const App: React.FC = () => {
                 {isJudgeThinking && (
                     <div className="text-center p-8 bg-slate-800 border border-slate-700 rounded-2xl flex flex-col items-center justify-center gap-4">
                          <div className="w-16 h-16 border-4 border-yellow-600 border-t-transparent rounded-full animate-spin"></div>
-                         <p className="text-yellow-500 font-bold animate-pulse">The Chief Justice is reviewing the transcript...</p>
+                         <p className="text-yellow-500 font-bold animate-pulse">{t('judgeThinking')}</p>
                     </div>
                 )}
 
                 {judgeVerdict && (
                      <div className="text-center p-6 bg-slate-800/50 border border-slate-700 rounded-2xl flex justify-between items-center">
                         <div className="text-left">
-                            <h4 className="font-bold text-slate-300">Session Closed</h4>
-                            <p className="text-xs text-slate-500">The verdict has been delivered.</p>
+                            <h4 className="font-bold text-slate-300">{t('sessionClosed')}</h4>
+                            <p className="text-xs text-slate-500">{t('verdictDelivered')}</p>
                         </div>
                         <button 
                             onClick={() => window.location.reload()}
                             className="px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-bold transition-all text-sm"
                         >
-                            Start New Debate
+                            {t('startNewDebate')}
                         </button>
                      </div>
                 )}
@@ -457,10 +607,10 @@ const App: React.FC = () => {
               <div className="flex justify-between items-center text-sm">
                 <span className="flex items-center gap-2 text-slate-400">
                     <span className="w-3 h-3 bg-yellow-500 rounded-full animate-ping"></span>
-                    Current Phase: <strong className="text-white ml-1">{currentStep.label}</strong>
+                    {t('currentPhase')} <strong className="text-white ml-1">{currentStep.label}</strong>
                 </span>
                 <span className="text-slate-500">
-                    Turn {session.currentTurn + 1} of {DEBATE_SEQUENCE.length}
+                    {t('turnOf', { cur: session.currentTurn + 1, total: DEBATE_SEQUENCE.length })}
                 </span>
               </div>
 
@@ -488,7 +638,7 @@ const App: React.FC = () => {
                                 ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
                                 : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white'
                         }`}
-                        title={isRecording ? "Stop recording" : "Click to record voice"}
+                        title={isRecording ? t('stopRecording') : t('clickToRecord')}
                       >
                          {isRecording ? (
                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -508,13 +658,13 @@ const App: React.FC = () => {
                       
                       {(isRecording || isTranscribing) && (
                          <span className="text-xs font-bold text-slate-400 animate-pulse">
-                            {isRecording ? "Recording..." : "Transcribing..."}
+                            {isRecording ? t('recording') : t('transcribing')}
                          </span>
                       )}
                     </div>
 
                     <div className="absolute bottom-4 right-4 text-xs text-slate-500">
-                      Markdown supported
+                      {t('markdownSupported')}
                     </div>
                   </div>
                   <button
@@ -522,7 +672,7 @@ const App: React.FC = () => {
                     disabled={!inputText.trim() || isRecording || isTranscribing}
                     className="px-10 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-900/20 active:scale-95 flex items-center justify-center gap-2"
                   >
-                    Send Argument
+                    {t('sendArgument')}
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                     </svg>
@@ -536,7 +686,7 @@ const App: React.FC = () => {
                     <div className="w-2 h-2 bg-red-500 rounded-full animate-bounce"></div>
                   </div>
                   <p className="text-slate-400 text-sm font-medium tracking-wide italic">
-                    {currentStep.debater.name} is synthesizing counter-arguments...
+                    {t('aiSynthesizing', { name: currentStep.debater.name })}
                   </p>
                 </div>
               )}
