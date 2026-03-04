@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { serverPath } from '../paths.js';
 
 export type KbDocType = 'md' | 'pdf';
 export type KbDocStatus = 'uploaded' | 'converting' | 'converted' | 'failed';
@@ -26,7 +27,8 @@ export interface KbManifest {
 }
 
 export function kbRootDir(): string {
-  return path.resolve(process.cwd(), 'server', 'data', 'kb');
+  // 固定在 server/data/kb，避免云端启动目录(process.cwd)不同导致读写失败
+  return serverPath('data', 'kb');
 }
 
 export function kbDocsDir(): string {

@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { serverPath } from './paths.js';
 
 type Secrets = Partial<Record<string, string>>;
 
 function loadLocalSecrets(): Secrets {
   try {
-    const p = path.resolve(process.cwd(), 'server', 'secrets.json');
+    const p = serverPath('secrets.json');
     if (!fs.existsSync(p)) return {};
     const raw = fs.readFileSync(p, 'utf-8');
     const json = JSON.parse(raw);

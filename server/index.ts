@@ -11,6 +11,7 @@ import {
 } from './dashscope.js';
 import multer from 'multer';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import {
   addDoc,
@@ -34,7 +35,10 @@ app.use(express.json({ limit: '2mb' }));
 
 const PORT = appConfig.port;
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: globalConfig.kb.uploadMaxBytes } });
+// 上传落盘（避免 memoryStorage 导致大 PDF 直接 OOM/进程崩溃，从而出现 ERR_CONNECTION_RESET）
+const kbTmpDir = path.join(kbRootDir(), 'tmp');
+fsSync.mkdirSync(kbTmpDir, { recursive: true });
+const upload = multer({ dest: kbTmpDir, limits: { fileSize: globalConfig.kb.uploadMaxBytes } });
 
 type DebateArgument = {
   id: string;
@@ -140,7 +144,8 @@ async function buildKbContext(opts: {
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
-    dashscopeKeyConfigured: Boolean(process.env.DASHSCOPE_API_KEY),
+    dashscopeKeyConfigured: Boolean(globalConfig.dashscopeApiKey),
+    kbRootDir: kbRootDir(),
   });
 });
 
@@ -186,11 +191,12 @@ app.post('/api/kb/upload', (req, res) => {
       const dir = kbDocDir(meta.docId);
       await fs.mkdir(dir, { recursive: true });
 
-      if (type === 'md') {
-        await fs.writeFile(path.join(dir, 'content.md'), f.buffer);
-      } else {
-        await fs.writeFile(path.join(dir, 'source.pdf'), f.buffer);
-      }
+      // multer disk 模式：f.path 是临时文件路径
+      const tmpPath = f.path;
+      const destPath = type === 'md' ? path.join(dir, 'content.md') : path.join(dir, 'source.pdf');
+      // 覆盖写入
+      await fs.rm(destPath, { force: true }).catch(() => {});
+      await fs.rename(tmpPath, destPath);
 
       res.json({ doc: meta });
     } catch (e: any) {
