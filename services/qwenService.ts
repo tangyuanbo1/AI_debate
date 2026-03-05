@@ -1,6 +1,6 @@
 import type { SpeakerRole, DebateSide, Argument } from "../types";
 
-type StreamChunk = { text?: string; done?: boolean; error?: string };
+type StreamChunk = { text?: string; done?: boolean; error?: string; debug?: any };
 
 async function* sseToChunks(resp: Response): AsyncGenerator<StreamChunk> {
   const reader = resp.body?.getReader();
@@ -41,7 +41,7 @@ export async function generateDebateResponseStream(
   side: DebateSide,
   history: Argument[],
   lang: 'zh-CN' | 'en-US',
-  kb?: { enabled?: boolean; selectedDocIds?: string[]; topK?: number }
+  kb?: { enabled?: boolean; selectedDocIds?: string[]; topK?: number; debug?: boolean }
 ) {
   const resp = await fetch("/api/debate/stream", {
     method: "POST",
@@ -66,6 +66,7 @@ export async function generateDebateResponseStream(
   // 返回一个 async iterable，兼容 App.tsx 里 `for await`
   return (async function* () {
     for await (const chunk of sseToChunks(resp)) {
+      if (chunk?.debug) yield { debug: chunk.debug };
       if (chunk?.text) yield { text: chunk.text };
       if (chunk?.error) throw new Error(chunk.error);
     }

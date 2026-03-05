@@ -4,9 +4,8 @@ import { serverPath } from './paths.js';
 
 type Secrets = Partial<Record<string, string>>;
 
-function loadLocalSecrets(): Secrets {
+function readSecretsFile(p: string): Secrets {
   try {
-    const p = serverPath('secrets.json');
     if (!fs.existsSync(p)) return {};
     const raw = fs.readFileSync(p, 'utf-8');
     const json = JSON.parse(raw);
@@ -16,9 +15,14 @@ function loadLocalSecrets(): Secrets {
   }
 }
 
-const localSecrets = loadLocalSecrets();
 const secretsPath = serverPath('secrets.json');
+const exampleSecretsPath = serverPath('secrets.example.json');
+
+// 按你的要求：优先读 secrets.json；如果没有，则回退读 secrets.example.json
 const secretsExists = fs.existsSync(secretsPath);
+const exampleExists = fs.existsSync(exampleSecretsPath);
+const localSecrets = secretsExists ? readSecretsFile(secretsPath) : readSecretsFile(exampleSecretsPath);
+const loadedFrom = secretsExists ? 'secrets.json' : exampleExists ? 'secrets.example.json' : 'none';
 
 function getSecret(name: string): string {
   // 按你的要求：只从 server/secrets.json 读取（不再读取任何环境变量/.env）
@@ -27,8 +31,9 @@ function getSecret(name: string): string {
 
 export function getSecretsMeta() {
   return {
-    path: secretsPath,
-    exists: secretsExists,
+    path: secretsExists ? secretsPath : exampleSecretsPath,
+    exists: secretsExists || exampleExists,
+    loadedFrom,
     keys: Object.keys(localSecrets).sort(),
   };
 }

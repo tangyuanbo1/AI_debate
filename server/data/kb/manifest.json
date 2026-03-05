@@ -2,30 +2,25 @@
   "version": 1,
   "docs": [
     {
-      "docId": "5e29bd8df907dd48a7c011cc",
-      "filename": "ãæµ·æ´æµ®æ¸¸çç©å­¦ã_10199588.pdf",
+      "docId": "7c84f65192d178877d8d9c18",
+      "filename": "《入海河口湿地生态系统空间评价理论与实践》_13427321.pdf",
       "type": "pdf",
-      "status": "uploaded",
-      "createdAt": 1772630232355,
-      "updatedAt": 1772630232355
-    },
-    {
-      "docId": "12e0f271fe1e49f951df4b13",
-      "filename": "ãæµ·æ´æµ®æ¸¸çç©å­¦ã_10199588.pdf",
-      "type": "pdf",
-      "status": "uploaded",
-      "createdAt": 1772630151003,
-      "updatedAt": 1772630151003
+      "status": "converted",
+      "createdAt": 1772719228853,
+      "updatedAt": 1772719539974,
+      "ocrErrorMsg": "",
+      "ocrJobId": "ocrjob-ffbfbbec18e730e",
+      "ocrState": "done"
     },
     {
       "docId": "0c3ba54d238f24b3a0f13643",
       "filename": "ãæµ·æ´æµ®æ¸¸çç©å­¦ã_10199588.pdf",
       "type": "pdf",
-      "status": "converting",
+      "status": "converted",
       "createdAt": 1772629970241,
-      "updatedAt": 1772630412656,
+      "updatedAt": 1772718133718,
       "ocrJobId": "ocrjob-ff6af18fe09ac78",
-      "ocrState": "pending",
+      "ocrState": "done",
       "ocrErrorMsg": ""
     }
   ]

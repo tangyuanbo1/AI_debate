@@ -22,6 +22,7 @@ import {
   newDocId,
   type KbDocType,
   updateDoc,
+  removeDoc,
 } from './kb/store.js';
 import { grepWithIdfAndTableAwareness, formatContextsForDisplay } from './kb/grepRetrieval.js';
 import { llmDecideSearchToolArgs } from './kb/decision.js';
@@ -53,6 +54,7 @@ type KbConfig = {
   enabled?: boolean;
   selectedDocIds?: string[];
   topK?: number; // 默认 8
+  debug?: boolean;
 };
 
 function instructionForRole(role: string): string {
@@ -105,8 +107,12 @@ async function buildKbContext(opts: {
   query: string;
   lang: 'zh-CN' | 'en-US';
   kb?: KbConfig;
-}): Promise<string> {
-  if (!opts.kb?.enabled) return '';
+}): Promise<{ context: string; debug?: any }> {
+  if (!opts.kb?.enabled) {
+    return opts.kb?.debug
+      ? { context: '', debug: { ok: false, reason: 'kb_disabled' } }
+      : { context: '' };
+  }
 
   const selectedDocIds = Array.isArray(opts.kb.selectedDocIds) ? opts.kb.selectedDocIds : [];
   const targets = selectedDocIds.length ? selectedDocIds.map((id) => `docs/${id}`) : ['docs'];
@@ -118,9 +124,27 @@ async function buildKbContext(opts: {
 
   // 2) 强制重提关键词（更具体）：失败则回退 initKeywords
   const refined = await llmExtractKeywords({ query: opts.query, lang: opts.lang, minKeywords: 4 });
-  const finalKeywords = (refined?.length ? refined : initKeywords).slice(0, 12);
+  const refinedKeywords = refined?.length ? refined : [];
+  const finalKeywords = (refinedKeywords.length ? refinedKeywords : initKeywords).slice(0, 12);
 
-  if (!finalKeywords.length) return '';
+  if (!finalKeywords.length) {
+    return opts.kb?.debug
+      ? {
+          context: '',
+          debug: {
+            ok: false,
+            reason: 'no_keywords',
+            toolArgsOk: Boolean(toolArgs),
+            initKeywords,
+            refinedOk: Boolean(refined),
+            refinedKeywords,
+            queryChars: (opts.query ?? '').length,
+            hint:
+              '两路关键词都为空：常见原因是 LLM 未按要求输出纯 JSON（解析失败），或关键词被黑名单/数字校验过滤为空，或 query 太短/太泛。',
+          },
+        }
+      : { context: '' };
+  }
 
   // 3) Grep + IDF + table awareness
   const result = await grepWithIdfAndTableAwareness({
@@ -131,14 +155,58 @@ async function buildKbContext(opts: {
     topMatches: topK,
   });
 
-  if (!result.snippets.length) return '';
+  if (!result.snippets.length) {
+    return opts.kb?.debug
+      ? {
+          context: '',
+          debug: {
+            ok: false,
+            reason: 'no_snippets',
+            targets,
+            finalKeywords,
+            scannedFiles: result.scannedFiles,
+            matchedLines: result.matchedLines,
+            hint:
+              result.scannedFiles === 0
+                ? 'scannedFiles=0: 目标目录下没有任何 .md（PDF 可能还未产出 content.md）'
+                : 'scannedFiles>0 但 matchedLines=0：关键词未命中任何行（可换关键词/检查OCR文本是否异常）',
+          },
+        }
+      : { context: '' };
+  }
 
   const formatted = formatContextsForDisplay(result.snippets);
-  if (!formatted) return '';
+  if (!formatted) return { context: '' };
 
-  return opts.lang === 'zh-CN'
-    ? `\n\n【知识库检索上下文】（仅供参考；如使用请在回答中尽量引用片段的文件/行号信息）\n${formatted}\n`
-    : `\n\n[Knowledge Base Context] (for reference; if used, cite file/line info from snippets)\n${formatted}\n`;
+  const context =
+    opts.lang === 'zh-CN'
+      ? `\n\n【知识库检索上下文】（仅供参考；如使用请在回答中尽量引用片段的文件/行号信息）\n${formatted}\n`
+      : `\n\n[Knowledge Base Context] (for reference; if used, cite file/line info from snippets)\n${formatted}\n`;
+
+  const debug = opts.kb?.debug
+    ? {
+        ok: true,
+        targets,
+        finalKeywords,
+        scannedFiles: result.scannedFiles,
+        matchedLines: result.matchedLines,
+        // 片段元信息 + 内容预览（避免过长刷爆控制台）
+        snippets: result.snippets.map((s) => ({
+          relPath: s.relPath,
+          lineNumber: s.lineNumber,
+          priority: s.priority,
+          matchedKeywords: s.matchedKeywords,
+          contentPreview:
+            s.content.length > 800 ? `${s.content.slice(0, 800)}\n... [truncated] ...` : s.content,
+        })),
+        // 最终注入到 prompt 的上下文（预览）
+        injectedContextChars: context.length,
+        injectedContextPreview:
+          context.length > 4000 ? `${context.slice(0, 4000)}\n... [truncated] ...` : context,
+      }
+    : undefined;
+
+  return { context, debug };
 }
 
 app.get('/api/health', (_req, res) => {
@@ -154,6 +222,77 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/kb/docs', async (_req, res) => {
   const m = await readManifest();
   res.json({ docs: m.docs });
+});
+
+app.get('/api/kb/docs/:docId/debug', async (req, res) => {
+  try {
+    const { docId } = req.params;
+    const docDir = kbDocDir(docId);
+    const contentMd = path.join(docDir, 'content.md');
+    const sourcePdf = path.join(docDir, 'source.pdf');
+
+    const mdStat = await fs.stat(contentMd).catch(() => null);
+    const pdfStat = await fs.stat(sourcePdf).catch(() => null);
+
+    res.json({
+      docId,
+      docDir,
+      contentMd: {
+        exists: Boolean(mdStat),
+        bytes: mdStat?.size ?? 0,
+      },
+      sourcePdf: {
+        exists: Boolean(pdfStat),
+        bytes: pdfStat?.size ?? 0,
+      },
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Debug failed' });
+  }
+});
+
+app.delete('/api/kb/docs/:docId', async (req, res) => {
+  try {
+    const { docId } = req.params;
+    const removed = await removeDoc(docId);
+    if (!removed) {
+      res.status(404).json({ error: 'Doc not found' });
+      return;
+    }
+    // 删除磁盘目录
+    const dir = kbDocDir(docId);
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Delete failed' });
+  }
+});
+
+app.post('/api/kb/docs/:docId/ocr/reset', async (req, res) => {
+  try {
+    const { docId } = req.params;
+    const m = await readManifest();
+    const doc = m.docs.find((d) => d.docId === docId);
+    if (!doc) {
+      res.status(404).json({ error: 'Doc not found' });
+      return;
+    }
+    if (doc.type !== 'pdf') {
+      res.status(400).json({ error: 'Only PDF can reset OCR state' });
+      return;
+    }
+    await updateDoc(docId, {
+      status: 'uploaded',
+      ocrJobId: undefined,
+      ocrState: undefined,
+      ocrErrorMsg: '',
+    });
+    // 不删除 source.pdf；只清理转换产物
+    await fs.rm(path.join(kbDocDir(docId), 'content.md'), { force: true }).catch(() => {});
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Reset failed' });
+  }
 });
 
 app.post('/api/kb/upload', (req, res) => {
@@ -182,9 +321,13 @@ app.post('/api/kb/upload', (req, res) => {
         return;
       }
 
+      // 处理中文文件名乱码：busboy/multer 在部分环境会把 header 参数当 latin1 解码
+      const filenameUtf8 = Buffer.from(f.originalname, 'latin1').toString('utf8');
+      const filename = /[\u4e00-\u9fff《》]/.test(filenameUtf8) ? filenameUtf8 : f.originalname;
+
       const meta = await addDoc({
         docId: newDocId(),
-        filename: f.originalname,
+        filename,
         type,
         status: 'uploaded',
       });
@@ -259,7 +402,7 @@ app.get('/api/kb/docs/:docId/ocr/status', async (req, res) => {
       return;
     }
     if (!doc.ocrJobId) {
-      res.status(400).json({ error: 'OCR job not started' });
+      res.status(409).json({ error: 'OCR job not started (please click Start OCR first)' });
       return;
     }
 
@@ -377,7 +520,11 @@ app.post('/api/debate/stream', async (req, res) => {
         ? `Topic: ${topic}\nOpponent last point: ${last.text}\nYour role: ${role}\nRespond now.`
         : `Topic: ${topic}\nYour role: ${role}\nRespond now.`;
 
-    const kbContext = await buildKbContext({ query: retrievalQuery, lang: targetLang, kb });
+    const kbBuilt = await buildKbContext({ query: retrievalQuery, lang: targetLang, kb });
+    const kbContext = typeof kbBuilt === 'string' ? kbBuilt : kbBuilt.context;
+    if (kb && kb.debug && typeof kbBuilt !== 'string' && kbBuilt.debug) {
+      sseSend(res, { debug: kbBuilt.debug }, 'kb_debug');
+    }
 
     const messages: DashScopeMessage[] = [
       {
@@ -532,11 +679,12 @@ Evaluate strictly based on logic, rhetoric, and rebuttal effectiveness. Output M
 `.trim();
 
     const prompt = targetLang === 'zh-CN' ? promptZh : promptEn;
-    const kbContext = await buildKbContext({
+    const kbBuilt = await buildKbContext({
       query: `Topic: ${topic}\nJudge task: final verdict based on transcript.\nTranscript:\n${historyText}`,
       lang: targetLang,
       kb,
     });
+    const kbContext = typeof kbBuilt === 'string' ? kbBuilt : kbBuilt.context;
 
     const upstream = await fetch(dashscopeTextGenUrl(), {
       method: 'POST',

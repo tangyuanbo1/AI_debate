@@ -90,4 +90,14 @@ export async function updateDoc(docId: string, patch: Partial<KbDocMeta>): Promi
   return next;
 }
 
+export async function removeDoc(docId: string): Promise<KbDocMeta | null> {
+  const m = await readManifest();
+  const idx = m.docs.findIndex((d) => d.docId === docId);
+  if (idx < 0) return null;
+  const removed = m.docs[idx];
+  m.docs.splice(idx, 1);
+  await writeManifest(m);
+  return removed;
+}
+
 

@@ -116,6 +116,7 @@ const App: React.FC = () => {
 
   // Knowledge Base (minimal UI)
   const [kbEnabled, setKbEnabled] = useState<boolean>(() => window.localStorage.getItem('kbEnabled') === 'true');
+  const [kbDebug, setKbDebug] = useState<boolean>(() => window.localStorage.getItem('kbDebug') === 'true');
   const [kbDocs, setKbDocs] = useState<Array<{ docId: string; filename: string; type: string; status: string }>>([]);
   const [kbSelectedDocIds, setKbSelectedDocIds] = useState<string[]>(() => {
     try {
@@ -132,6 +133,10 @@ const App: React.FC = () => {
   }, [kbEnabled]);
 
   useEffect(() => {
+    window.localStorage.setItem('kbDebug', String(kbDebug));
+  }, [kbDebug]);
+
+  useEffect(() => {
     window.localStorage.setItem('kbSelectedDocIds', JSON.stringify(kbSelectedDocIds));
   }, [kbSelectedDocIds]);
 
@@ -145,12 +150,37 @@ const App: React.FC = () => {
     }
   };
 
+  const [kbSearch, setKbSearch] = useState('');
+
+  useEffect(() => {
+    if (!session.isStarted) {
+      refreshKbDocs();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.isStarted]);
+
+  const fixMojibake = (s: string) => {
+    // 仅用于显示：尝试把 latin1 误解码的 UTF-8 还原
+    try {
+      if (!s) return s;
+      if (/[\u4e00-\u9fff《》]/.test(s)) return s; // 已含中文则不处理
+      if (!/[Ããâ]/.test(s)) return s; // 轻量启发式：常见乱码字符
+      const bytes = Uint8Array.from(Array.from(s).map((c) => c.charCodeAt(0)));
+      const decoded = new TextDecoder('utf-8').decode(bytes);
+      return decoded || s;
+    } catch {
+      return s;
+    }
+  };
+
   const startPdfOcr = async (docId: string) => {
     const resp = await fetch(`/api/kb/docs/${docId}/ocr/start`, { method: 'POST' });
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '');
       throw new Error(`OCR start failed: ${resp.status} ${detail}`);
     }
+    const json = await resp.json().catch(() => null);
+    console.log('[OCR_START]', { docId, json });
     await refreshKbDocs();
   };
 
@@ -160,6 +190,27 @@ const App: React.FC = () => {
       const detail = await resp.text().catch(() => '');
       throw new Error(`OCR status failed: ${resp.status} ${detail}`);
     }
+    const json = await resp.json().catch(() => null);
+    console.log('[OCR_STATUS]', { docId, json });
+    await refreshKbDocs();
+  };
+
+  const resetPdfOcr = async (docId: string) => {
+    const resp = await fetch(`/api/kb/docs/${docId}/ocr/reset`, { method: 'POST' });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      throw new Error(`OCR reset failed: ${resp.status} ${detail}`);
+    }
+    await refreshKbDocs();
+  };
+
+  const deleteKbDoc = async (docId: string) => {
+    const resp = await fetch(`/api/kb/docs/${docId}`, { method: 'DELETE' });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      throw new Error(`Delete failed: ${resp.status} ${detail}`);
+    }
+    setKbSelectedDocIds((prev) => prev.filter((x) => x !== docId));
     await refreshKbDocs();
   };
 
@@ -343,14 +394,19 @@ const App: React.FC = () => {
         DebateSide.CON,
         currentHistory,
         lang,
-        { enabled: kbEnabled, selectedDocIds: kbSelectedDocIds, topK: 8 }
+        { enabled: kbEnabled, selectedDocIds: kbSelectedDocIds, topK: 8, debug: kbDebug }
       );
 
       const aiArgId = Math.random().toString(36).substr(2, 9);
       let fullText = "";
       let isFirstChunk = true;
 
-      for await (const chunk of streamResponse) {
+      for await (const chunk of streamResponse as any) {
+        if (chunk?.debug) {
+          console.groupCollapsed('[KB_DEBUG]');
+          console.log(chunk.debug);
+          console.groupEnd();
+        }
         const text = chunk.text;
         if (text) {
           fullText += text;
@@ -446,15 +502,25 @@ const App: React.FC = () => {
           <form onSubmit={handleStart} className="space-y-6">
             <div className="bg-slate-900/40 border border-slate-700 rounded-2xl p-5 space-y-4">
               <div className="flex items-center justify-between">
-                <div className="font-bold text-slate-200">Knowledge Base</div>
-                <label className="flex items-center gap-2 text-sm text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={kbEnabled}
-                    onChange={(e) => setKbEnabled(e.target.checked)}
-                  />
-                  Enable
-                </label>
+                <div className="font-bold text-slate-200">{lang === 'zh-CN' ? '知识库' : 'Knowledge Base'}</div>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={kbEnabled}
+                      onChange={(e) => setKbEnabled(e.target.checked)}
+                    />
+                    {lang === 'zh-CN' ? '启用' : 'Enable'}
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={kbDebug}
+                      onChange={(e) => setKbDebug(e.target.checked)}
+                    />
+                    {lang === 'zh-CN' ? '调试输出' : 'Debug'}
+                  </label>
+                </div>
               </div>
 
               <div className="flex items-center gap-3">
@@ -480,30 +546,53 @@ const App: React.FC = () => {
                   onClick={refreshKbDocs}
                   className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-bold border border-slate-600"
                 >
-                  Refresh
+                  {lang === 'zh-CN' ? '刷新列表' : 'Refresh'}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <input
+                  value={kbSearch}
+                  onChange={(e) => setKbSearch(e.target.value)}
+                  placeholder={lang === 'zh-CN' ? '搜索文件名…' : 'Search filename...'}
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/40"
+                />
+                <button
+                  type="button"
+                  onClick={() => setKbSearch('')}
+                  className="px-4 py-2 bg-slate-900/50 hover:bg-slate-700 rounded-lg text-sm font-bold border border-slate-700"
+                >
+                  {lang === 'zh-CN' ? '清空' : 'Clear'}
                 </button>
               </div>
 
               <div className="space-y-2 max-h-40 overflow-auto pr-2">
                 {kbDocs.length === 0 ? (
-                  <div className="text-xs text-slate-500">No documents uploaded yet.</div>
+                  <div className="text-xs text-slate-500">{lang === 'zh-CN' ? '还没有入库文件。支持上传 .md 或 .pdf' : 'No documents yet. Upload .md or .pdf'}</div>
                 ) : (
-                  kbDocs.map((d) => {
+                  kbDocs
+                    .filter((d) => fixMojibake(d.filename).toLowerCase().includes(kbSearch.trim().toLowerCase()))
+                    .map((d: any) => {
                     const checked = kbSelectedDocIds.includes(d.docId);
+                    const selectable = d.type !== 'pdf' || d.status === 'converted';
                     return (
                       <label key={d.docId} className="flex items-center gap-2 text-sm text-slate-300">
                         <input
                           type="checkbox"
                           checked={checked}
+                          disabled={!selectable}
                           onChange={(e) => {
                             setKbSelectedDocIds((prev) =>
                               e.target.checked ? Array.from(new Set([...prev, d.docId])) : prev.filter((x) => x !== d.docId),
                             );
                           }}
                         />
-                        <span className="truncate flex-1">{d.filename}</span>
+                        <span className="truncate flex-1">{fixMojibake(d.filename)}</span>
                         <span className="text-[10px] text-slate-500 uppercase">{d.type}</span>
                         <span className="text-[10px] text-slate-500 uppercase">{d.status}</span>
+                        {!selectable && (
+                          <span className="text-[10px] text-slate-500">{lang === 'zh-CN' ? '需先OCR' : 'OCR first'}</span>
+                        )}
                         {d.type === 'pdf' && d.status !== 'converted' && (
                           <div className="flex items-center gap-2">
                             <button
@@ -516,26 +605,57 @@ const App: React.FC = () => {
                                 }
                               }}
                               className="px-2 py-1 text-[10px] font-bold bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded"
-                              title="Run PaddleOCR and convert PDF to Markdown"
+                              title={lang === 'zh-CN' ? '启动 PaddleOCR：PDF 转 Markdown（异步）' : 'Start PaddleOCR: PDF to Markdown (async)'}
                             >
-                              Convert
+                              {lang === 'zh-CN' ? '开始OCR' : 'Start OCR'}
                             </button>
+                            {d.status === 'converting' && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await pollPdfOcr(d.docId);
+                                  } catch (e: any) {
+                                    alert(e?.message || 'OCR status failed');
+                                  }
+                                }}
+                                className="px-2 py-1 text-[10px] font-bold bg-slate-900/50 hover:bg-slate-700 border border-slate-700 rounded"
+                                title={lang === 'zh-CN' ? '查询 OCR 状态（pending/running/done）' : 'Poll OCR status (pending/running/done)'}
+                              >
+                                {lang === 'zh-CN' ? '查询状态' : 'Poll'}
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={async () => {
                                 try {
-                                  await pollPdfOcr(d.docId);
+                                  await resetPdfOcr(d.docId);
                                 } catch (e: any) {
-                                  alert(e?.message || 'OCR status failed');
+                                  alert(e?.message || 'Reset failed');
                                 }
                               }}
-                              className="px-2 py-1 text-[10px] font-bold bg-slate-900/50 hover:bg-slate-700 border border-slate-700 rounded"
-                              title="Poll OCR status"
+                              className="px-2 py-1 text-[10px] font-bold bg-slate-900/30 hover:bg-slate-700 border border-slate-700 rounded"
+                              title={lang === 'zh-CN' ? '清理 OCR 任务信息，回到 uploaded 状态' : 'Clear OCR job info and return to uploaded'}
                             >
-                              Poll
+                              {lang === 'zh-CN' ? '重置' : 'Reset'}
                             </button>
                           </div>
                         )}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!confirm(lang === 'zh-CN' ? '确定删除该文件及其转换产物？' : 'Delete this document and its artifacts?')) return;
+                            try {
+                              await deleteKbDoc(d.docId);
+                            } catch (e: any) {
+                              alert(e?.message || 'Delete failed');
+                            }
+                          }}
+                          className="px-2 py-1 text-[10px] font-bold bg-red-900/30 hover:bg-red-700/40 border border-red-800/60 rounded"
+                          title={lang === 'zh-CN' ? '从知识库删除（会从磁盘移除）' : 'Delete from KB (removes from disk)'}
+                        >
+                          {lang === 'zh-CN' ? '删除' : 'Delete'}
+                        </button>
                       </label>
                     );
                   })
