@@ -8,83 +8,11 @@ import { generateDebateResponseStream, generateJudgeVerdict, transcribeAudio } f
 import DebaterCard from './components/DebaterCard';
 
 const App: React.FC = () => {
-  type Language = 'zh-CN' | 'en-US';
-  const [lang, setLang] = useState<Language>(() => {
-    const saved = window.localStorage.getItem('lang');
-    return saved === 'en-US' || saved === 'zh-CN' ? saved : 'en-US';
-  });
-
-  useEffect(() => {
-    window.localStorage.setItem('lang', lang);
-  }, [lang]);
+  // UI 仅保留英文：移除中文按钮与语言切换模块（底层逻辑不受影响）
+  const lang = 'en-US' as const;
 
   const t = useMemo(() => {
-    const dict: Record<Language, Record<string, string>> = {
-      'zh-CN': {
-        appTitle: '课堂辩论',
-        appSubtitle: '人类 vs 人工智能',
-        debateTopicLabel: '辩题',
-        debateTopicPlaceholder: '例如：社交媒体平台是否应该为打击假新闻负责？',
-        teamHumans: '人类队（正方）',
-        teamAI: 'AI队（反方）',
-        opening: '开篇陈词',
-        rebuttal: '反驳',
-        conclusion: '总结',
-        enterArena: '进入辩论场',
-        status: '状态',
-        live: '进行中',
-        reset: '重置',
-        waitingOpening: '等待 {name} 的开篇陈词…',
-        debateConcluded: '辩论结束',
-        timeForJudgment: '双方陈词已完毕，现在进入裁决。',
-        callForVerdict: '请求判决',
-        judgeThinking: '首席法官正在审阅逐字稿…',
-        sessionClosed: '本场已结束',
-        verdictDelivered: '判决已发布。',
-        startNewDebate: '开始新辩题',
-        currentPhase: '当前阶段：',
-        turnOf: '回合 {cur}/{total}',
-        markdownSupported: '支持 Markdown',
-        sendArgument: '发送观点',
-        aiSynthesizing: '{name} 正在组织反驳…',
-        judgeUnavailable: '裁判暂不可用。',
-        micNoAccess: '无法访问麦克风，请检查权限设置。',
-        transcriptionFailed: '语音转写失败，请重试。',
-        stopRecording: '停止录音',
-        clickToRecord: '点击录音',
-        recording: '录音中…',
-        transcribing: '转写中…',
-        verdictTitle: '首席法官判词',
-        verdictSubtitle: '最终评估与评分',
-        debateArena: '辩论竞技场',
-        kbTitle: '知识库',
-        kbEnable: '启用（对话前会检索并注入上下文）',
-        kbDebug: '调试输出',
-        kbUpload: '上传文件（.md / .pdf）',
-        kbNoFile: '未选择文件',
-        kbRefresh: '刷新列表',
-        kbSearch: '搜索文件名…',
-        kbClear: '清空',
-        kbNoDocs: '还没有入库文件。支持上传 .md 或 .pdf',
-        kbNeedOcr: '需先OCR',
-        kbStartOcr: '开始OCR',
-        kbPoll: '查询状态',
-        kbReset: '重置',
-        kbDelete: '删除',
-        kbDeleteConfirm: '确定删除该文件及其转换产物？',
-        kbCollapseOpen: '展开',
-        kbCollapseClose: '收起',
-        debateArchiveTitle: '历史辩论',
-        debateArchiveSearch: '搜索历史辩论（标题/辩题）…',
-        debateArchiveNoDocs: '暂无历史辩论存档',
-        debateArchiveOpen: '预览',
-        debateArchiveDownload: '下载',
-        debateArchiveDelete: '删除',
-        debateArchiveDeleteConfirm: '确定删除该辩论存档？',
-        debateSave: '保存为 Markdown',
-        debateSaveNamePlaceholder: '输入存档名称（可选）',
-        debateSaving: '保存中…',
-      },
+    const dict: Record<typeof lang, Record<string, string>> = {
       'en-US': {
         appTitle: 'Classroom Debate',
         appSubtitle: 'Humans vs. Artificial Intelligence',
@@ -682,9 +610,9 @@ const App: React.FC = () => {
       }
       setDebateSaveName('');
       await refreshDebateDocs();
-      alert(lang === 'zh-CN' ? '已保存' : 'Saved');
+      alert('Saved');
     } catch (e: any) {
-      alert(e?.message || (lang === 'zh-CN' ? '保存失败' : 'Save failed'));
+      alert(e?.message || 'Save failed');
     } finally {
       setIsSavingDebate(false);
     }
@@ -699,30 +627,7 @@ const App: React.FC = () => {
               {t('appTitle')}
             </h1>
             <p className="text-slate-400 text-lg">{t('appSubtitle')}</p>
-            <div className="flex justify-center gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setLang('zh-CN')}
-                className={`px-4 py-2 rounded-lg text-sm font-bold border transition-colors ${
-                  lang === 'zh-CN'
-                    ? 'bg-slate-700 border-slate-500 text-white'
-                    : 'bg-slate-900/40 border-slate-700 text-slate-300 hover:bg-slate-700/40'
-                }`}
-              >
-                中文
-              </button>
-              <button
-                type="button"
-                onClick={() => setLang('en-US')}
-                className={`px-4 py-2 rounded-lg text-sm font-bold border transition-colors ${
-                  lang === 'en-US'
-                    ? 'bg-slate-700 border-slate-500 text-white'
-                    : 'bg-slate-900/40 border-slate-700 text-slate-300 hover:bg-slate-700/40'
-                }`}
-              >
-                English
-              </button>
-            </div>
+            {/* English-only UI: language switch removed */}
           </div>
           
           <form onSubmit={handleStart} className="space-y-6">
@@ -785,7 +690,7 @@ const App: React.FC = () => {
                     <div className="flex flex-wrap items-center gap-4">
                       <label className="flex items-center gap-2 text-sm text-slate-300">
                         <input type="checkbox" checked={kbEnabled} onChange={(e) => setKbEnabled(e.target.checked)} />
-                        {lang === 'zh-CN' ? '启用' : 'Enable'}
+                        Enable
                       </label>
                       <label className="flex items-center gap-2 text-sm text-slate-300">
                         <input type="checkbox" checked={kbDebug} onChange={(e) => setKbDebug(e.target.checked)} />
@@ -1082,7 +987,7 @@ const App: React.FC = () => {
                     onClick={() => setDebatePreview({ open: false, title: '', markdown: '' })}
                     className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold border border-slate-700"
                   >
-                    {lang === 'zh-CN' ? '关闭' : 'Close'}
+                    Close
                   </button>
                 </div>
               </div>
@@ -1203,7 +1108,7 @@ const App: React.FC = () => {
                               open={isThinkingPhase ? true : undefined}
                             >
                               <summary className="cursor-pointer text-xs font-bold text-slate-300 select-none">
-                                {lang === 'zh-CN' ? '思考过程（点击展开）' : 'Thinking (click to expand)'}
+                                Thinking (click to expand)
                               </summary>
                               <pre className="mt-2 text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
                                 {thinking}
