@@ -40,7 +40,7 @@ export async function generateDebateResponseStream(
   role: SpeakerRole,
   side: DebateSide,
   history: Argument[],
-  lang: 'zh-CN' | 'en-US',
+  lang: 'zh-CN' | 'en-US' | 'auto',
   kb?: { enabled?: boolean; selectedDocIds?: string[]; topK?: number; debug?: boolean }
 ) {
   const resp = await fetch("/api/debate/stream", {
@@ -76,7 +76,7 @@ export async function generateDebateResponseStream(
 export async function generateJudgeVerdict(
   topic: string,
   history: Argument[],
-  lang: 'zh-CN' | 'en-US',
+  lang: 'zh-CN' | 'en-US' | 'auto',
   kb?: { enabled?: boolean; selectedDocIds?: string[]; topK?: number }
 ) {
   const resp = await fetch("/api/judge", {

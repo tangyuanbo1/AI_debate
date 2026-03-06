@@ -29,10 +29,19 @@ import { llmDecideSearchToolArgs } from './kb/decision.js';
 import { llmExtractKeywords } from './kb/llmKeyword.js';
 import { downloadJsonl, getOcrJobStatus, parseJsonlToMarkdownPages, startOcrJobWithPdfBuffer } from './ocr/paddleOcrClient.js';
 import { config as globalConfig } from './config.js';
+import {
+  addDebateDoc,
+  debateDocDir,
+  debateMarkdownPath,
+  newDebateId,
+  readDebateManifest,
+  removeDebateDocMeta,
+} from './debates/store.js';
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+// 辩论存档/判决可能包含较长文本，适当放宽 JSON 体积上限
+app.use(express.json({ limit: '5mb' }));
 
 const PORT = appConfig.port;
 
@@ -49,6 +58,8 @@ type DebateArgument = {
   text: string;
   timestamp: number;
 };
+
+type ModelLang = 'zh-CN' | 'en-US' | 'auto';
 
 type KbConfig = {
   enabled?: boolean;
@@ -83,6 +94,43 @@ function sseSend(res: express.Response, data: unknown, event?: string) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+function escapeMdText(s: string): string {
+  return (s ?? '').replace(/\r\n/g, '\n').trim();
+}
+
+function debateToMarkdown(opts: {
+  name: string;
+  topic: string;
+  history: DebateArgument[];
+  judgeVerdict?: string;
+}) {
+  const created = new Date().toISOString();
+  const lines: string[] = [];
+  lines.push(`# ${escapeMdText(opts.name || 'Debate')}`);
+  lines.push('');
+  lines.push(`- Topic: ${escapeMdText(opts.topic)}`);
+  lines.push(`- SavedAt: ${created}`);
+  lines.push(`- Turns: ${Array.isArray(opts.history) ? opts.history.length : 0}`);
+  lines.push('');
+  lines.push('## Transcript');
+  lines.push('');
+  for (const arg of Array.isArray(opts.history) ? opts.history : []) {
+    const who = `${arg.side} - ${arg.speakerName}`;
+    const when = arg.timestamp ? new Date(arg.timestamp).toISOString() : '';
+    lines.push(`### ${escapeMdText(who)}${when ? ` (${when})` : ''}`);
+    lines.push('');
+    lines.push(escapeMdText(arg.text || ''));
+    lines.push('');
+  }
+  if (opts.judgeVerdict) {
+    lines.push('## Judge Verdict');
+    lines.push('');
+    lines.push(escapeMdText(opts.judgeVerdict));
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
 function buildDebatePrompt(topic: string, role: string, side: 'PRO' | 'CON', history: DebateArgument[]) {
   const historyText = history
     .map((arg) => `${arg.side} (${arg.speakerName}): ${arg.text}`)
@@ -105,7 +153,7 @@ Do not use meta-talk. Just provide the speech.
 
 async function buildKbContext(opts: {
   query: string;
-  lang: 'zh-CN' | 'en-US';
+  lang: ModelLang;
   kb?: KbConfig;
 }): Promise<{ context: string; debug?: any }> {
   if (!opts.kb?.enabled) {
@@ -181,7 +229,9 @@ async function buildKbContext(opts: {
   const context =
     opts.lang === 'zh-CN'
       ? `\n\n【知识库检索上下文】（仅供参考；如使用请在回答中尽量引用片段的文件/行号信息）\n${formatted}\n`
-      : `\n\n[Knowledge Base Context] (for reference; if used, cite file/line info from snippets)\n${formatted}\n`;
+      : opts.lang === 'en-US'
+        ? `\n\n[Knowledge Base Context] (for reference; if used, cite file/line info from snippets)\n${formatted}\n`
+        : `\n\n[Knowledge Base Context / 知识库检索上下文]\n${formatted}\n`;
 
   const debug = opts.kb?.debug
     ? {
@@ -209,6 +259,27 @@ async function buildKbContext(opts: {
   return { context, debug };
 }
 
+function buildRetrievalQueryForDebate(topic: string, role: string, history: DebateArgument[]) {
+  const h = Array.isArray(history) ? history : [];
+  const last = h.length ? h[h.length - 1] : null;
+
+  // 第一位 AI（通常只有 1 条对方发言）→ 用 topic + 对方上一轮
+  if (h.length <= 1) {
+    const opponent = last?.text?.trim() ? last.text : '';
+    return `Topic: ${topic}\nOpponent last point: ${opponent}\nYour role: ${role}\nRespond now.`;
+  }
+
+  // 第二位/第三位 AI → 绑入“前面所有内容”（做长度裁剪）
+  const historyText = h
+    .map((arg) => `${arg.side} (${arg.speakerName}): ${arg.text}`)
+    .join('\n\n');
+
+  const maxChars = 6000;
+  const clipped = historyText.length > maxChars ? historyText.slice(historyText.length - maxChars) : historyText;
+
+  return `Topic: ${topic}\nYour role: ${role}\nFull debate so far (clipped if long):\n${clipped}\n\nNow respond to the latest opponent points and the overall debate.`;
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
@@ -216,6 +287,69 @@ app.get('/api/health', (_req, res) => {
     kbRootDir: kbRootDir(),
     secrets: getSecretsMeta(),
   });
+});
+
+// ---------------------- Debate Archive APIs (Markdown) ----------------------
+app.get('/api/debates', async (_req, res) => {
+  const m = await readDebateManifest();
+  res.json({ ok: true, docs: m.docs });
+});
+
+app.post('/api/debates', async (req, res) => {
+  try {
+    const { name, topic, history, judgeVerdict } = (req.body ?? {}) as {
+      name: string;
+      topic: string;
+      history: DebateArgument[];
+      judgeVerdict?: string;
+    };
+
+    if (!topic || !Array.isArray(history)) {
+      return res.status(400).json({ ok: false, error: 'Missing topic/history' });
+    }
+    const cleanName = (name || '').trim() || `Debate ${new Date().toLocaleString()}`;
+
+    const debateId = newDebateId();
+    await fs.mkdir(debateDocDir(debateId), { recursive: true });
+
+    const md = debateToMarkdown({ name: cleanName, topic, history, judgeVerdict });
+    await fs.writeFile(debateMarkdownPath(debateId), md, 'utf-8');
+
+    const meta = await addDebateDoc({
+      debateId,
+      name: cleanName,
+      topic,
+      turnCount: history.length,
+      hasVerdict: Boolean(judgeVerdict),
+    });
+
+    return res.json({ ok: true, debateId, meta });
+  } catch (err: any) {
+    console.error('[DEBATE_SAVE]', err);
+    return res.status(500).json({ ok: false, error: String(err?.message || err || 'save_failed') });
+  }
+});
+
+app.get('/api/debates/:debateId/markdown', async (req, res) => {
+  const debateId = String(req.params.debateId || '');
+  if (!debateId) return res.status(400).send('Missing debateId');
+  try {
+    const md = await fs.readFile(debateMarkdownPath(debateId), 'utf-8');
+    res.status(200);
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    return res.send(md);
+  } catch {
+    return res.status(404).send('Not found');
+  }
+});
+
+app.delete('/api/debates/:debateId', async (req, res) => {
+  const debateId = String(req.params.debateId || '');
+  if (!debateId) return res.status(400).json({ ok: false, error: 'Missing debateId' });
+  const removed = await removeDebateDocMeta(debateId);
+  if (!removed) return res.status(404).json({ ok: false, error: 'Not found' });
+  await fs.rm(debateDocDir(debateId), { recursive: true, force: true }).catch(() => {});
+  return res.json({ ok: true });
 });
 
 // ---------------------- Knowledge Base APIs ----------------------
@@ -506,35 +640,68 @@ app.post('/api/debate/stream', async (req, res) => {
       role: string;
       side: 'PRO' | 'CON';
       history: DebateArgument[];
-      lang?: 'zh-CN' | 'en-US';
+      lang?: ModelLang;
       kb?: KbConfig;
     };
 
     const prompt = buildDebatePrompt(topic, role, side, Array.isArray(history) ? history : []);
-    const targetLang = lang === 'en-US' ? 'en-US' : 'zh-CN';
+    const effectiveLang: ModelLang = lang === 'zh-CN' || lang === 'en-US' ? lang : 'auto';
 
     // 针对本回合构造检索 query（尽量贴近“对方刚说了什么 + 当前任务”）
-    const last = Array.isArray(history) && history.length ? history[history.length - 1] : null;
-    const retrievalQuery =
-      last?.text?.trim()
-        ? `Topic: ${topic}\nOpponent last point: ${last.text}\nYour role: ${role}\nRespond now.`
-        : `Topic: ${topic}\nYour role: ${role}\nRespond now.`;
+    const retrievalQuery = buildRetrievalQueryForDebate(topic, role, Array.isArray(history) ? history : []);
 
-    const kbBuilt = await buildKbContext({ query: retrievalQuery, lang: targetLang, kb });
+    const kbBuilt = await buildKbContext({ query: retrievalQuery, lang: effectiveLang, kb });
     const kbContext = typeof kbBuilt === 'string' ? kbBuilt : kbBuilt.context;
     if (kb && kb.debug && typeof kbBuilt !== 'string' && kbBuilt.debug) {
       sseSend(res, { debug: kbBuilt.debug }, 'kb_debug');
     }
 
+    const formatInstruction =
+      effectiveLang === 'zh-CN'
+        ? `
+请严格按以下格式输出（不要输出其它内容，不要加解释）：
+[[THINKING]]
+请先输出 THINKING，再输出 SPEECH。
+用一段连贯的文字说明你的推理路线（可读、不要暴露详细推理链）。
+[[/THINKING]]
+[[SPEECH]]
+（辩论发言正文）
+[[/SPEECH]]
+`.trim()
+        : effectiveLang === 'en-US'
+          ? `
+Output strictly in this format (no extra text, no explanations):
+[[THINKING]]
+You MUST output THINKING first, then SPEECH.
+Write ONE coherent paragraph describing your reasoning route (readable; do NOT reveal detailed chain-of-thought).
+[[/THINKING]]
+[[SPEECH]]
+(the debate speech)
+[[/SPEECH]]
+`.trim()
+          : `
+Output strictly in this format (no extra text, no explanations):
+[[THINKING]]
+You MUST output THINKING first, then SPEECH.
+Write ONE coherent paragraph describing your reasoning route (readable; do NOT reveal detailed chain-of-thought).
+Also, use the same language as the debate topic/opponent messages.
+[[/THINKING]]
+[[SPEECH]]
+(the debate speech)
+[[/SPEECH]]
+`.trim();
+
     const messages: DashScopeMessage[] = [
       {
         role: 'system',
         content:
-          targetLang === 'zh-CN'
-            ? '你是世界级辩手。请只输出辩词正文，不要输出任何解释。请使用简体中文。'
-            : 'You are a world-class debater. Output ONLY the speech content. Use English.',
+          effectiveLang === 'zh-CN'
+            ? '你是世界级辩手。输出必须包含 THINKING 和 发言正文。'
+            : effectiveLang === 'en-US'
+              ? 'You are a world-class debater. Output MUST include THINKING and the speech.'
+              : 'You are a world-class debater. Output MUST include THINKING and the speech. Use the same language as the debate content.',
       },
-      { role: 'user', content: prompt + kbContext },
+      { role: 'user', content: `${formatInstruction}\n\n${prompt}${kbContext}` },
     ];
 
     const upstream = await fetch(dashscopeTextGenUrl(), {
@@ -620,14 +787,14 @@ app.post('/api/judge', async (req, res) => {
     const { topic, history, lang } = (req.body ?? {}) as {
       topic: string;
       history: DebateArgument[];
-      lang?: 'zh-CN' | 'en-US';
+      lang?: ModelLang;
     };
 
     const historyText = (Array.isArray(history) ? history : [])
       .map((arg) => `[${arg.side}] ${arg.speakerName} (${arg.id}): ${arg.text}`)
       .join('\n\n');
 
-    const targetLang = lang === 'en-US' ? 'en-US' : 'zh-CN';
+    const effectiveLang: ModelLang = lang === 'zh-CN' || lang === 'en-US' ? lang : 'auto';
     const kb = (req.body ?? {})?.kb as KbConfig | undefined;
 
     const promptZh = `
@@ -678,10 +845,22 @@ Evaluate strictly based on logic, rhetoric, and rebuttal effectiveness. Output M
 [Detailed analysis of key clashes and why the winner won]
 `.trim();
 
-    const prompt = targetLang === 'zh-CN' ? promptZh : promptEn;
+    const promptAuto = `
+You are the Chief Justice of the Debate Arena. The debate has concluded.
+You MUST output in the same language as the transcript.
+Use Markdown and follow ONE of the following formats (choose the matching language format, output only one).
+
+--- Chinese Format ---
+${promptZh}
+
+--- English Format ---
+${promptEn}
+`.trim();
+
+    const prompt = effectiveLang === 'zh-CN' ? promptZh : effectiveLang === 'en-US' ? promptEn : promptAuto;
     const kbBuilt = await buildKbContext({
       query: `Topic: ${topic}\nJudge task: final verdict based on transcript.\nTranscript:\n${historyText}`,
-      lang: targetLang,
+      lang: effectiveLang,
       kb,
     });
     const kbContext = typeof kbBuilt === 'string' ? kbBuilt : kbBuilt.context;
@@ -700,9 +879,11 @@ Evaluate strictly based on logic, rhetoric, and rebuttal effectiveness. Output M
             {
               role: 'system',
               content:
-                targetLang === 'zh-CN'
+                effectiveLang === 'zh-CN'
                   ? '你是严谨且公正的辩论裁判。输出只包含判词内容。'
-                  : 'You are a strict and fair debate judge. Output ONLY the verdict content.',
+                  : effectiveLang === 'en-US'
+                    ? 'You are a strict and fair debate judge. Output ONLY the verdict content.'
+                    : 'You are a strict and fair debate judge. Output ONLY the verdict content in the same language as the transcript.',
             },
             { role: 'user', content: prompt + kbContext },
           ],

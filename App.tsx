@@ -57,6 +57,33 @@ const App: React.FC = () => {
         verdictTitle: '首席法官判词',
         verdictSubtitle: '最终评估与评分',
         debateArena: '辩论竞技场',
+        kbTitle: '知识库',
+        kbEnable: '启用（对话前会检索并注入上下文）',
+        kbDebug: '调试输出',
+        kbUpload: '上传文件（.md / .pdf）',
+        kbNoFile: '未选择文件',
+        kbRefresh: '刷新列表',
+        kbSearch: '搜索文件名…',
+        kbClear: '清空',
+        kbNoDocs: '还没有入库文件。支持上传 .md 或 .pdf',
+        kbNeedOcr: '需先OCR',
+        kbStartOcr: '开始OCR',
+        kbPoll: '查询状态',
+        kbReset: '重置',
+        kbDelete: '删除',
+        kbDeleteConfirm: '确定删除该文件及其转换产物？',
+        kbCollapseOpen: '展开',
+        kbCollapseClose: '收起',
+        debateArchiveTitle: '历史辩论',
+        debateArchiveSearch: '搜索历史辩论（标题/辩题）…',
+        debateArchiveNoDocs: '暂无历史辩论存档',
+        debateArchiveOpen: '预览',
+        debateArchiveDownload: '下载',
+        debateArchiveDelete: '删除',
+        debateArchiveDeleteConfirm: '确定删除该辩论存档？',
+        debateSave: '保存为 Markdown',
+        debateSaveNamePlaceholder: '输入存档名称（可选）',
+        debateSaving: '保存中…',
       },
       'en-US': {
         appTitle: 'Classroom Debate',
@@ -95,6 +122,33 @@ const App: React.FC = () => {
         verdictTitle: 'Chief Justice Verdict',
         verdictSubtitle: 'Final Evaluation & Scoring',
         debateArena: 'Debate Arena',
+        kbTitle: 'Knowledge Base',
+        kbEnable: 'Enable (retrieve & inject context)',
+        kbDebug: 'Debug',
+        kbUpload: 'Upload (.md / .pdf)',
+        kbNoFile: 'No file selected',
+        kbRefresh: 'Refresh',
+        kbSearch: 'Search filename...',
+        kbClear: 'Clear',
+        kbNoDocs: 'No documents yet. Upload .md or .pdf',
+        kbNeedOcr: 'OCR first',
+        kbStartOcr: 'Start OCR',
+        kbPoll: 'Poll',
+        kbReset: 'Reset',
+        kbDelete: 'Delete',
+        kbDeleteConfirm: 'Delete this document and its artifacts?',
+        kbCollapseOpen: 'Expand',
+        kbCollapseClose: 'Collapse',
+        debateArchiveTitle: 'Debate Archive',
+        debateArchiveSearch: 'Search archive (title/topic)...',
+        debateArchiveNoDocs: 'No archived debates yet',
+        debateArchiveOpen: 'Preview',
+        debateArchiveDownload: 'Download',
+        debateArchiveDelete: 'Delete',
+        debateArchiveDeleteConfirm: 'Delete this archived debate?',
+        debateSave: 'Save as Markdown',
+        debateSaveNamePlaceholder: 'Archive name (optional)',
+        debateSaving: 'Saving...',
       },
     };
 
@@ -117,6 +171,7 @@ const App: React.FC = () => {
   // Knowledge Base (minimal UI)
   const [kbEnabled, setKbEnabled] = useState<boolean>(() => window.localStorage.getItem('kbEnabled') === 'true');
   const [kbDebug, setKbDebug] = useState<boolean>(() => window.localStorage.getItem('kbDebug') === 'true');
+  const [kbCollapsed, setKbCollapsed] = useState<boolean>(() => window.localStorage.getItem('kbCollapsed') !== 'false');
   const [kbDocs, setKbDocs] = useState<Array<{ docId: string; filename: string; type: string; status: string }>>([]);
   const [kbSelectedDocIds, setKbSelectedDocIds] = useState<string[]>(() => {
     try {
@@ -137,6 +192,10 @@ const App: React.FC = () => {
   }, [kbDebug]);
 
   useEffect(() => {
+    window.localStorage.setItem('kbCollapsed', String(kbCollapsed));
+  }, [kbCollapsed]);
+
+  useEffect(() => {
     window.localStorage.setItem('kbSelectedDocIds', JSON.stringify(kbSelectedDocIds));
   }, [kbSelectedDocIds]);
 
@@ -151,10 +210,65 @@ const App: React.FC = () => {
   };
 
   const [kbSearch, setKbSearch] = useState('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [pendingFileName, setPendingFileName] = useState<string>('');
+
+  // Debate archive (Markdown)
+  const [debateDocs, setDebateDocs] = useState<
+    Array<{ debateId: string; name: string; topic: string; createdAt: number; turnCount: number; hasVerdict: boolean }>
+  >([]);
+  const [debateSearch, setDebateSearch] = useState('');
+  const [debateArchiveCollapsed, setDebateArchiveCollapsed] = useState<boolean>(true);
+  const [debatePreview, setDebatePreview] = useState<{ open: boolean; title: string; markdown: string; debateId?: string }>(
+    { open: false, title: '', markdown: '' }
+  );
+  const [debateSaveName, setDebateSaveName] = useState<string>('');
+  const [isSavingDebate, setIsSavingDebate] = useState<boolean>(false);
+
+  const refreshDebateDocs = async () => {
+    try {
+      const resp = await fetch('/api/debates');
+      const json = (await resp.json()) as { docs?: any[] };
+      setDebateDocs(Array.isArray(json.docs) ? json.docs : []);
+    } catch {
+      setDebateDocs([]);
+    }
+  };
+
+  const fetchDebateMarkdown = async (debateId: string) => {
+    const resp = await fetch(`/api/debates/${debateId}/markdown`);
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      throw new Error(`Load failed: ${resp.status} ${detail}`);
+    }
+    return await resp.text();
+  };
+
+  const downloadMarkdown = (filename: string, markdown: string) => {
+    const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename.endsWith('.md') ? filename : `${filename}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const deleteDebateDoc = async (debateId: string) => {
+    const resp = await fetch(`/api/debates/${debateId}`, { method: 'DELETE' });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      throw new Error(`Delete failed: ${resp.status} ${detail}`);
+    }
+    await refreshDebateDocs();
+  };
 
   useEffect(() => {
     if (!session.isStarted) {
       refreshKbDocs();
+      refreshDebateDocs();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.isStarted]);
@@ -263,6 +377,90 @@ const App: React.FC = () => {
       <li className="text-slate-300 leading-relaxed">{children}</li>
     ),
   } as const;
+
+  // 用于“历史辩论预览”的 Markdown 渲染样式（不依赖 Tailwind Typography 插件）
+  const archiveMarkdownComponents = {
+    h1: ({ children }: { children: React.ReactNode }) => (
+      <h1 className="text-2xl sm:text-3xl font-black text-slate-100 tracking-tight mb-4">{children}</h1>
+    ),
+    h2: ({ children }: { children: React.ReactNode }) => (
+      <h2 className="text-xl sm:text-2xl font-black text-slate-100 tracking-tight mt-8 mb-3">{children}</h2>
+    ),
+    h3: ({ children }: { children: React.ReactNode }) => (
+      <h3 className="text-lg font-bold text-slate-100 mt-6 mb-2">{children}</h3>
+    ),
+    p: ({ children }: { children: React.ReactNode }) => (
+      <p className="text-slate-300 leading-relaxed mb-3 whitespace-pre-wrap">{children}</p>
+    ),
+    strong: ({ children }: { children: React.ReactNode }) => (
+      <strong className="text-slate-100 font-bold">{children}</strong>
+    ),
+    ul: ({ children }: { children: React.ReactNode }) => (
+      <ul className="list-disc pl-6 space-y-2 my-3 text-slate-300">{children}</ul>
+    ),
+    ol: ({ children }: { children: React.ReactNode }) => (
+      <ol className="list-decimal pl-6 space-y-2 my-3 text-slate-300">{children}</ol>
+    ),
+    li: ({ children }: { children: React.ReactNode }) => (
+      <li className="leading-relaxed">{children}</li>
+    ),
+    blockquote: ({ children }: { children: React.ReactNode }) => (
+      <blockquote className="border-l-4 border-slate-700 pl-4 my-4 text-slate-300 italic">{children}</blockquote>
+    ),
+    code: ({ children }: { children: React.ReactNode }) => (
+      <code className="px-1 py-0.5 rounded bg-slate-950/50 border border-slate-800 text-slate-200 text-[12px]">
+        {children}
+      </code>
+    ),
+    pre: ({ children }: { children: React.ReactNode }) => (
+      <pre className="my-4 p-4 rounded-xl bg-slate-950/40 border border-slate-700 overflow-auto text-[12px] text-slate-200">
+        {children}
+      </pre>
+    ),
+    table: ({ children }: { children: React.ReactNode }) => (
+      <div className="my-4 overflow-auto rounded-xl border border-slate-700">
+        <table className="w-full text-sm">{children}</table>
+      </div>
+    ),
+    thead: ({ children }: { children: React.ReactNode }) => <thead className="bg-slate-900">{children}</thead>,
+    th: ({ children }: { children: React.ReactNode }) => (
+      <th className="text-left px-3 py-2 font-bold text-slate-200 border-b border-slate-700 whitespace-nowrap">{children}</th>
+    ),
+    td: ({ children }: { children: React.ReactNode }) => (
+      <td className="px-3 py-2 text-slate-300 border-b border-slate-800 align-top">{children}</td>
+    ),
+  } as const;
+
+  const parseThinkingSpeech = (raw: string) => {
+    // 支持流式：即使结束标记还没到，也尽量把“已出现的部分”渲染出来
+    const tOpen = '[[THINKING]]';
+    const tClose = '[[/THINKING]]';
+    const sOpen = '[[SPEECH]]';
+    const sClose = '[[/SPEECH]]';
+
+    const tStart = raw.indexOf(tOpen);
+    const tEnd = raw.indexOf(tClose);
+    const sStart = raw.indexOf(sOpen);
+    const sEnd = raw.indexOf(sClose);
+
+    const hasThinkingOpen = tStart >= 0;
+    const hasSpeechOpen = sStart >= 0;
+
+    const thinking = hasThinkingOpen
+      ? raw.slice(tStart + tOpen.length, tEnd > tStart ? tEnd : raw.length).trim()
+      : '';
+
+    // 关键：如果已经进入 THINKING 阶段但 SPEECH 还没开始，
+    // 不要把 raw 输出到正文区域（否则看起来“思考过程跑到外面”）
+    const speech = hasSpeechOpen
+      ? raw.slice(sStart + sOpen.length, sEnd > sStart ? sEnd : raw.length).trim()
+      : hasThinkingOpen
+        ? ''
+        : raw;
+
+    const isThinkingPhase = hasThinkingOpen && !hasSpeechOpen;
+    return { thinking, speech, isThinkingPhase };
+  };
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -393,7 +591,7 @@ const App: React.FC = () => {
         step.debater.role,
         DebateSide.CON,
         currentHistory,
-        lang,
+        'auto',
         { enabled: kbEnabled, selectedDocIds: kbSelectedDocIds, topK: 8, debug: kbDebug }
       );
 
@@ -455,7 +653,7 @@ const App: React.FC = () => {
 
   const handleCallJudge = async () => {
     setIsJudgeThinking(true);
-    const verdict = await generateJudgeVerdict(session.topic, session.history, lang, {
+    const verdict = await generateJudgeVerdict(session.topic, session.history, 'auto', {
       enabled: kbEnabled,
       selectedDocIds: kbSelectedDocIds,
       topK: 8,
@@ -464,12 +662,40 @@ const App: React.FC = () => {
     setIsJudgeThinking(false);
   };
 
+  const saveDebateArchive = async () => {
+    if (!judgeVerdict) return;
+    setIsSavingDebate(true);
+    try {
+      const resp = await fetch('/api/debates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: debateSaveName,
+          topic: session.topic,
+          history: session.history,
+          judgeVerdict,
+        }),
+      });
+      if (!resp.ok) {
+        const detail = await resp.text().catch(() => '');
+        throw new Error(`Save failed: ${resp.status} ${detail}`);
+      }
+      setDebateSaveName('');
+      await refreshDebateDocs();
+      alert(lang === 'zh-CN' ? '已保存' : 'Saved');
+    } catch (e: any) {
+      alert(e?.message || (lang === 'zh-CN' ? '保存失败' : 'Save failed'));
+    } finally {
+      setIsSavingDebate(false);
+    }
+  };
+
   if (!session.isStarted) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-900 text-white font-lexend">
-        <div className="max-w-2xl w-full space-y-8 bg-slate-800 p-10 rounded-3xl shadow-2xl border border-slate-700">
+      <div className="min-h-screen flex flex-col items-center justify-center px-4 py-6 sm:p-6 bg-slate-900 text-white font-lexend">
+        <div className="max-w-2xl w-full space-y-6 sm:space-y-8 bg-slate-800 p-5 sm:p-10 rounded-3xl shadow-2xl border border-slate-700">
           <div className="text-center space-y-4">
-            <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+            <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
               {t('appTitle')}
             </h1>
             <p className="text-slate-400 text-lg">{t('appSubtitle')}</p>
@@ -500,181 +726,18 @@ const App: React.FC = () => {
           </div>
           
           <form onSubmit={handleStart} className="space-y-6">
-            <div className="bg-slate-900/40 border border-slate-700 rounded-2xl p-5 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="font-bold text-slate-200">{lang === 'zh-CN' ? '知识库' : 'Knowledge Base'}</div>
-                <div className="flex items-center gap-4">
-                  <label className="flex items-center gap-2 text-sm text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={kbEnabled}
-                      onChange={(e) => setKbEnabled(e.target.checked)}
-                    />
-                    {lang === 'zh-CN' ? '启用' : 'Enable'}
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={kbDebug}
-                      onChange={(e) => setKbDebug(e.target.checked)}
-                    />
-                    {lang === 'zh-CN' ? '调试输出' : 'Debug'}
-                  </label>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <input
-                  type="file"
-                  accept=".md,.markdown,.pdf"
-                  onChange={async (e) => {
-                    const input = e.currentTarget;
-                    const file = e.target.files?.[0];
-                    try {
-                      if (file) await uploadKbFile(file);
-                    } catch (err: any) {
-                      alert(err?.message || 'Upload failed');
-                    } finally {
-                      // 避免异步后 currentTarget 失效导致报错
-                      input.value = '';
-                    }
-                  }}
-                  className="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-bold file:bg-slate-700 file:text-white hover:file:bg-slate-600"
-                />
-                <button
-                  type="button"
-                  onClick={refreshKbDocs}
-                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-bold border border-slate-600"
-                >
-                  {lang === 'zh-CN' ? '刷新列表' : 'Refresh'}
-                </button>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <input
-                  value={kbSearch}
-                  onChange={(e) => setKbSearch(e.target.value)}
-                  placeholder={lang === 'zh-CN' ? '搜索文件名…' : 'Search filename...'}
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/40"
-                />
-                <button
-                  type="button"
-                  onClick={() => setKbSearch('')}
-                  className="px-4 py-2 bg-slate-900/50 hover:bg-slate-700 rounded-lg text-sm font-bold border border-slate-700"
-                >
-                  {lang === 'zh-CN' ? '清空' : 'Clear'}
-                </button>
-              </div>
-
-              <div className="space-y-2 max-h-40 overflow-auto pr-2">
-                {kbDocs.length === 0 ? (
-                  <div className="text-xs text-slate-500">{lang === 'zh-CN' ? '还没有入库文件。支持上传 .md 或 .pdf' : 'No documents yet. Upload .md or .pdf'}</div>
-                ) : (
-                  kbDocs
-                    .filter((d) => fixMojibake(d.filename).toLowerCase().includes(kbSearch.trim().toLowerCase()))
-                    .map((d: any) => {
-                    const checked = kbSelectedDocIds.includes(d.docId);
-                    const selectable = d.type !== 'pdf' || d.status === 'converted';
-                    return (
-                      <label key={d.docId} className="flex items-center gap-2 text-sm text-slate-300">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={!selectable}
-                          onChange={(e) => {
-                            setKbSelectedDocIds((prev) =>
-                              e.target.checked ? Array.from(new Set([...prev, d.docId])) : prev.filter((x) => x !== d.docId),
-                            );
-                          }}
-                        />
-                        <span className="truncate flex-1">{fixMojibake(d.filename)}</span>
-                        <span className="text-[10px] text-slate-500 uppercase">{d.type}</span>
-                        <span className="text-[10px] text-slate-500 uppercase">{d.status}</span>
-                        {!selectable && (
-                          <span className="text-[10px] text-slate-500">{lang === 'zh-CN' ? '需先OCR' : 'OCR first'}</span>
-                        )}
-                        {d.type === 'pdf' && d.status !== 'converted' && (
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                try {
-                                  await startPdfOcr(d.docId);
-                                } catch (e: any) {
-                                  alert(e?.message || 'OCR start failed');
-                                }
-                              }}
-                              className="px-2 py-1 text-[10px] font-bold bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded"
-                              title={lang === 'zh-CN' ? '启动 PaddleOCR：PDF 转 Markdown（异步）' : 'Start PaddleOCR: PDF to Markdown (async)'}
-                            >
-                              {lang === 'zh-CN' ? '开始OCR' : 'Start OCR'}
-                            </button>
-                            {d.status === 'converting' && (
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  try {
-                                    await pollPdfOcr(d.docId);
-                                  } catch (e: any) {
-                                    alert(e?.message || 'OCR status failed');
-                                  }
-                                }}
-                                className="px-2 py-1 text-[10px] font-bold bg-slate-900/50 hover:bg-slate-700 border border-slate-700 rounded"
-                                title={lang === 'zh-CN' ? '查询 OCR 状态（pending/running/done）' : 'Poll OCR status (pending/running/done)'}
-                              >
-                                {lang === 'zh-CN' ? '查询状态' : 'Poll'}
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                try {
-                                  await resetPdfOcr(d.docId);
-                                } catch (e: any) {
-                                  alert(e?.message || 'Reset failed');
-                                }
-                              }}
-                              className="px-2 py-1 text-[10px] font-bold bg-slate-900/30 hover:bg-slate-700 border border-slate-700 rounded"
-                              title={lang === 'zh-CN' ? '清理 OCR 任务信息，回到 uploaded 状态' : 'Clear OCR job info and return to uploaded'}
-                            >
-                              {lang === 'zh-CN' ? '重置' : 'Reset'}
-                            </button>
-                          </div>
-                        )}
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            if (!confirm(lang === 'zh-CN' ? '确定删除该文件及其转换产物？' : 'Delete this document and its artifacts?')) return;
-                            try {
-                              await deleteKbDoc(d.docId);
-                            } catch (e: any) {
-                              alert(e?.message || 'Delete failed');
-                            }
-                          }}
-                          className="px-2 py-1 text-[10px] font-bold bg-red-900/30 hover:bg-red-700/40 border border-red-800/60 rounded"
-                          title={lang === 'zh-CN' ? '从知识库删除（会从磁盘移除）' : 'Delete from KB (removes from disk)'}
-                        >
-                          {lang === 'zh-CN' ? '删除' : 'Delete'}
-                        </button>
-                      </label>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-2">{t('debateTopicLabel')}</label>
               <textarea
                 value={session.topic}
                 onChange={(e) => setSession({ ...session, topic: e.target.value })}
                 placeholder={t('debateTopicPlaceholder')}
-                className="w-full h-32 px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-white resize-none transition-all"
+                className="w-full h-28 sm:h-32 px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-white resize-none transition-all"
                 required
               />
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-xl">
                 <p className="font-bold text-blue-400 mb-2">{t('teamHumans')}</p>
                 <ul className="text-xs text-blue-200/70 space-y-1">
@@ -693,6 +756,300 @@ const App: React.FC = () => {
               </div>
             </div>
 
+            {/* Knowledge Base (collapsible, placed below teams) */}
+            <div className="bg-slate-900/40 border border-slate-700 rounded-2xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setKbCollapsed((v) => !v)}
+                className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-900/60 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="font-bold text-slate-200">{t('kbTitle')}</div>
+                  <span className="text-[10px] text-slate-500 uppercase">
+                    {kbCollapsed ? t('kbCollapseOpen') : t('kbCollapseClose')}
+                  </span>
+                </div>
+                <div className={`transition-transform ${kbCollapsed ? '' : 'rotate-180'}`}>
+                  <svg className="w-5 h-5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </button>
+
+              {!kbCollapsed && (
+                <div className="px-5 pb-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="text-xs text-slate-500">
+                      {t('kbEnable')}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-4">
+                      <label className="flex items-center gap-2 text-sm text-slate-300">
+                        <input type="checkbox" checked={kbEnabled} onChange={(e) => setKbEnabled(e.target.checked)} />
+                        {lang === 'zh-CN' ? '启用' : 'Enable'}
+                      </label>
+                      <label className="flex items-center gap-2 text-sm text-slate-300">
+                        <input type="checkbox" checked={kbDebug} onChange={(e) => setKbDebug(e.target.checked)} />
+                        {t('kbDebug')}
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Custom file picker (avoid browser-native Chinese label in English mode) */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".md,.markdown,.pdf"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const input = e.currentTarget;
+                      const file = e.target.files?.[0];
+                      setPendingFileName(file?.name ?? '');
+                      try {
+                        if (file) await uploadKbFile(file);
+                      } catch (err: any) {
+                        alert(err?.message || 'Upload failed');
+                      } finally {
+                        input.value = '';
+                        setPendingFileName('');
+                      }
+                    }}
+                  />
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-bold border border-slate-600 shrink-0"
+                    >
+                      {t('kbUpload')}
+                    </button>
+                    <div className="flex-1 text-xs text-slate-400 truncate">
+                      {pendingFileName ? pendingFileName : t('kbNoFile')}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={refreshKbDocs}
+                      className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-bold border border-slate-600 shrink-0"
+                    >
+                      {t('kbRefresh')}
+                    </button>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                    <input
+                      value={kbSearch}
+                      onChange={(e) => setKbSearch(e.target.value)}
+                      placeholder={t('kbSearch')}
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setKbSearch('')}
+                      className="px-4 py-2 bg-slate-900/50 hover:bg-slate-700 rounded-lg text-sm font-bold border border-slate-700 shrink-0"
+                    >
+                      {t('kbClear')}
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 max-h-40 overflow-auto pr-2">
+                    {kbDocs.length === 0 ? (
+                      <div className="text-xs text-slate-500">{t('kbNoDocs')}</div>
+                    ) : (
+                      kbDocs
+                        .filter((d) => fixMojibake(d.filename).toLowerCase().includes(kbSearch.trim().toLowerCase()))
+                        .map((d: any) => {
+                          const checked = kbSelectedDocIds.includes(d.docId);
+                          const selectable = d.type !== 'pdf' || d.status === 'converted';
+                          return (
+                            <label key={d.docId} className="flex items-center gap-2 text-sm text-slate-300">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={!selectable}
+                                onChange={(e) => {
+                                  setKbSelectedDocIds((prev) =>
+                                    e.target.checked ? Array.from(new Set([...prev, d.docId])) : prev.filter((x) => x !== d.docId),
+                                  );
+                                }}
+                              />
+                              <span className="truncate flex-1">{fixMojibake(d.filename)}</span>
+                              <span className="text-[10px] text-slate-500 uppercase">{d.type}</span>
+                              <span className="text-[10px] text-slate-500 uppercase">{d.status}</span>
+                              {!selectable && <span className="text-[10px] text-slate-500">{t('kbNeedOcr')}</span>}
+                              {d.type === 'pdf' && d.status !== 'converted' && (
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        await startPdfOcr(d.docId);
+                                      } catch (e: any) {
+                                        alert(e?.message || 'OCR start failed');
+                                      }
+                                    }}
+                                    className="px-2 py-1 text-[10px] font-bold bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded"
+                                  >
+                                    {t('kbStartOcr')}
+                                  </button>
+                                  {d.status === 'converting' && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        try {
+                                          await pollPdfOcr(d.docId);
+                                        } catch (e: any) {
+                                          alert(e?.message || 'OCR status failed');
+                                        }
+                                      }}
+                                      className="px-2 py-1 text-[10px] font-bold bg-slate-900/50 hover:bg-slate-700 border border-slate-700 rounded"
+                                    >
+                                      {t('kbPoll')}
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        await resetPdfOcr(d.docId);
+                                      } catch (e: any) {
+                                        alert(e?.message || 'Reset failed');
+                                      }
+                                    }}
+                                    className="px-2 py-1 text-[10px] font-bold bg-slate-900/30 hover:bg-slate-700 border border-slate-700 rounded"
+                                  >
+                                    {t('kbReset')}
+                                  </button>
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!confirm(t('kbDeleteConfirm'))) return;
+                                  try {
+                                    await deleteKbDoc(d.docId);
+                                  } catch (e: any) {
+                                    alert(e?.message || 'Delete failed');
+                                  }
+                                }}
+                                className="px-2 py-1 text-[10px] font-bold bg-red-900/30 hover:bg-red-700/40 border border-red-800/60 rounded"
+                              >
+                                {t('kbDelete')}
+                              </button>
+                            </label>
+                          );
+                        })
+                    )}
+                  </div>
+
+                </div>
+              )}
+            </div>
+
+            {/* Debate Archive (collapsible) - same level as Knowledge Base */}
+            <div className="bg-slate-900/40 border border-slate-700 rounded-2xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setDebateArchiveCollapsed((v) => !v)}
+                className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-900/60 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="font-bold text-slate-200">{t('debateArchiveTitle')}</div>
+                  <span className="text-[10px] text-slate-500 uppercase">
+                    {debateArchiveCollapsed ? t('kbCollapseOpen') : t('kbCollapseClose')}
+                  </span>
+                </div>
+                <div className={`transition-transform ${debateArchiveCollapsed ? '' : 'rotate-180'}`}>
+                  <svg className="w-5 h-5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </button>
+
+              {!debateArchiveCollapsed && (
+                <div className="px-5 pb-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                    <input
+                      value={debateSearch}
+                      onChange={(e) => setDebateSearch(e.target.value)}
+                      placeholder={t('debateArchiveSearch')}
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={refreshDebateDocs}
+                      className="px-4 py-2 bg-slate-900/50 hover:bg-slate-700 rounded-lg text-sm font-bold border border-slate-700 shrink-0"
+                    >
+                      {t('kbRefresh')}
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 max-h-56 overflow-auto pr-2">
+                    {debateDocs.length === 0 ? (
+                      <div className="text-xs text-slate-500">{t('debateArchiveNoDocs')}</div>
+                    ) : (
+                      debateDocs
+                        .filter((d) => {
+                          const q = debateSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          return `${d.name} ${d.topic}`.toLowerCase().includes(q);
+                        })
+                        .map((d) => (
+                          <div key={d.debateId} className="flex items-center gap-2 text-sm text-slate-300">
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate font-bold text-slate-200">{d.name}</div>
+                              <div className="truncate text-[11px] text-slate-500">
+                                {new Date(d.createdAt).toLocaleString()} · {d.turnCount} turns{d.hasVerdict ? ' · verdict' : ''}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  const md = await fetchDebateMarkdown(d.debateId);
+                                  setDebatePreview({ open: true, title: d.name, markdown: md, debateId: d.debateId });
+                                } catch (e: any) {
+                                  alert(e?.message || 'Load failed');
+                                }
+                              }}
+                              className="px-2 py-1 text-[10px] font-bold bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded shrink-0"
+                            >
+                              {t('debateArchiveOpen')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  const md = await fetchDebateMarkdown(d.debateId);
+                                  downloadMarkdown(d.name || 'debate', md);
+                                } catch (e: any) {
+                                  alert(e?.message || 'Download failed');
+                                }
+                              }}
+                              className="px-2 py-1 text-[10px] font-bold bg-slate-900/50 hover:bg-slate-700 border border-slate-700 rounded shrink-0"
+                            >
+                              {t('debateArchiveDownload')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!confirm(t('debateArchiveDeleteConfirm'))) return;
+                                try {
+                                  await deleteDebateDoc(d.debateId);
+                                } catch (e: any) {
+                                  alert(e?.message || 'Delete failed');
+                                }
+                              }}
+                              className="px-2 py-1 text-[10px] font-bold bg-red-900/30 hover:bg-red-700/40 border border-red-800/60 rounded shrink-0"
+                            >
+                              {t('debateArchiveDelete')}
+                            </button>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
               type="submit"
               className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-900/20 active:scale-[0.98]"
@@ -701,6 +1058,40 @@ const App: React.FC = () => {
             </button>
           </form>
         </div>
+
+        {debatePreview.open && (
+          <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="w-full max-w-3xl bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden shadow-2xl">
+              <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-black text-slate-100 truncate">{debatePreview.title}</div>
+                  <div className="text-[11px] text-slate-500 truncate">Markdown preview</div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {debatePreview.debateId && (
+                    <button
+                      type="button"
+                      onClick={() => downloadMarkdown(debatePreview.title || 'debate', debatePreview.markdown)}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold border border-slate-700"
+                    >
+                      {t('debateArchiveDownload')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setDebatePreview({ open: false, title: '', markdown: '' })}
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold border border-slate-700"
+                  >
+                    {lang === 'zh-CN' ? '关闭' : 'Close'}
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-[75vh] overflow-auto p-4 sm:p-6">
+                <ReactMarkdown components={archiveMarkdownComponents}>{debatePreview.markdown}</ReactMarkdown>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -710,16 +1101,16 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-lexend">
       {/* Header */}
-      <header className="bg-slate-900 border-b border-slate-800 py-4 px-6 flex justify-between items-center sticky top-0 z-50">
-        <div className="flex items-center gap-4">
+      <header className="bg-slate-900 border-b border-slate-800 py-3 sm:py-4 px-4 sm:px-6 flex justify-between items-center sticky top-0 z-50">
+        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
           <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-xl italic shadow-inner">C</div>
-          <div>
+          <div className="min-w-0">
             <h2 className="font-bold text-sm text-slate-400 uppercase tracking-widest">{t('debateArena')}</h2>
-            <p className="text-lg font-bold truncate max-w-md">{session.topic}</p>
+            <p className="text-base sm:text-lg font-bold truncate max-w-[55vw] sm:max-w-md">{session.topic}</p>
           </div>
         </div>
-        <div className="flex items-center gap-6">
-            <div className="text-right">
+        <div className="flex items-center gap-3 sm:gap-6 shrink-0">
+            <div className="text-right hidden sm:block">
                 <div className="text-[10px] text-slate-500 uppercase font-bold">{t('status')}</div>
                 <div className="text-sm font-bold text-emerald-400 flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -739,29 +1130,29 @@ const App: React.FC = () => {
       <main className="flex-1 flex overflow-hidden">
         
         {/* Stages View */}
-        <div className="flex-1 flex flex-col p-8 overflow-y-auto">
+        <div className="flex-1 flex flex-col px-4 py-6 sm:p-8 overflow-y-auto">
           
           {/* Debaters Row */}
-          <div className="flex justify-between items-center mb-12">
-            <div className="flex gap-4">
+          <div className="mb-8 sm:mb-12">
+            <div className="w-full flex items-center justify-start sm:justify-center gap-3 sm:gap-4 overflow-x-auto overflow-y-visible pb-3 px-1 flex-nowrap">
               {STUDENT_TEAM.map((d) => (
-                <DebaterCard 
-                  key={d.id} 
-                  debater={d} 
-                  isActive={currentStep?.debater.id === d.id} 
+                <DebaterCard
+                  key={d.id}
+                  debater={d}
+                  isActive={currentStep?.debater.id === d.id}
                   side="PRO"
                 />
               ))}
-            </div>
 
-            <div className="text-4xl font-black text-slate-700 px-8 italic">VS</div>
+              <div className="shrink-0 px-2 sm:px-4">
+                <div className="text-xs sm:text-sm font-black text-slate-500 italic select-none">VS</div>
+              </div>
 
-            <div className="flex gap-4">
               {AI_TEAM.map((d) => (
-                <DebaterCard 
-                  key={d.id} 
-                  debater={d} 
-                  isActive={currentStep?.debater.id === d.id} 
+                <DebaterCard
+                  key={d.id}
+                  debater={d}
+                  isActive={currentStep?.debater.id === d.id}
                   side="CON"
                 />
               ))}
@@ -771,7 +1162,7 @@ const App: React.FC = () => {
           {/* Transcript/Argument Display */}
           <div 
             ref={scrollRef}
-            className="flex-1 bg-slate-900/50 rounded-3xl border border-slate-800 p-8 overflow-y-auto space-y-6 shadow-inner"
+            className="flex-1 bg-slate-900/50 rounded-3xl border border-slate-800 p-4 sm:p-8 overflow-y-auto space-y-6 shadow-inner"
           >
             {session.history.length === 0 && (
               <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-4">
@@ -789,7 +1180,7 @@ const App: React.FC = () => {
                 key={arg.id} 
                 className={`flex flex-col ${arg.side === DebateSide.PRO ? 'items-start' : 'items-end'}`}
               >
-                <div className={`max-w-[80%] rounded-2xl p-5 ${
+                <div className={`max-w-[92%] sm:max-w-[80%] rounded-2xl p-5 ${
                   arg.side === DebateSide.PRO 
                     ? 'bg-blue-900/20 border-l-4 border-blue-500 rounded-tl-none' 
                     : 'bg-red-900/20 border-r-4 border-red-500 rounded-tr-none' 
@@ -801,14 +1192,40 @@ const App: React.FC = () => {
                     <span className="opacity-30">•</span>
                     <span>{new Date(arg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
-                  <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">{arg.text}</p>
+                  {arg.side === DebateSide.CON ? (
+                    (() => {
+                      const { thinking, speech, isThinkingPhase } = parseThinkingSpeech(arg.text);
+                      return (
+                        <div className="space-y-3">
+                          {thinking && (
+                            <details
+                              className="bg-slate-950/30 border border-slate-700 rounded-xl p-3"
+                              open={isThinkingPhase ? true : undefined}
+                            >
+                              <summary className="cursor-pointer text-xs font-bold text-slate-300 select-none">
+                                {lang === 'zh-CN' ? '思考过程（点击展开）' : 'Thinking (click to expand)'}
+                              </summary>
+                              <pre className="mt-2 text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
+                                {thinking}
+                              </pre>
+                            </details>
+                          )}
+                          {speech && (
+                            <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">{speech}</p>
+                          )}
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">{arg.text}</p>
+                  )}
                 </div>
               </div>
             ))}
 
             {isAiThinking && (
               <div className="flex flex-col items-end animate-pulse">
-                <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 w-1/2">
+                <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 w-full sm:w-1/2">
                     <div className="flex items-center gap-3 flex-row-reverse">
                         <div className="w-8 h-8 bg-slate-700 rounded-full"></div>
                         <div className="space-y-2 flex-1 flex flex-col items-end">
@@ -832,7 +1249,7 @@ const App: React.FC = () => {
                                 <p className="text-xs text-yellow-500/60">{t('verdictSubtitle')}</p>
                             </div>
                         </div>
-                        <div className="p-8">
+                        <div className="p-4 sm:p-8">
                             <ReactMarkdown components={verdictMarkdownComponents}>
                               {judgeVerdict}
                             </ReactMarkdown>
@@ -845,7 +1262,7 @@ const App: React.FC = () => {
       </main>
 
       {/* Persistent Control Bar */}
-      <footer className="bg-slate-900 border-t border-slate-800 p-6">
+      <footer className="bg-slate-900 border-t border-slate-800 p-4 sm:p-6">
         <div className="max-w-5xl mx-auto">
           {isDebateOver ? (
             <div className="transition-all duration-500">
@@ -872,17 +1289,33 @@ const App: React.FC = () => {
                 )}
 
                 {judgeVerdict && (
-                     <div className="text-center p-6 bg-slate-800/50 border border-slate-700 rounded-2xl flex justify-between items-center">
+                     <div className="text-center p-6 bg-slate-800/50 border border-slate-700 rounded-2xl flex flex-col sm:flex-row gap-4 sm:justify-between sm:items-center">
                         <div className="text-left">
                             <h4 className="font-bold text-slate-300">{t('sessionClosed')}</h4>
                             <p className="text-xs text-slate-500">{t('verdictDelivered')}</p>
                         </div>
-                        <button 
-                            onClick={() => window.location.reload()}
-                            className="px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-bold transition-all text-sm"
-                        >
-                            {t('startNewDebate')}
-                        </button>
+                        <div className="w-full sm:w-auto flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                          <input
+                            value={debateSaveName}
+                            onChange={(e) => setDebateSaveName(e.target.value)}
+                            placeholder={t('debateSaveNamePlaceholder')}
+                            className="flex-1 bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/40 min-w-0"
+                          />
+                          <button
+                            type="button"
+                            onClick={saveDebateArchive}
+                            disabled={isSavingDebate}
+                            className="px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl font-bold transition-all text-sm"
+                          >
+                            {isSavingDebate ? t('debateSaving') : t('debateSave')}
+                          </button>
+                          <button 
+                              onClick={() => window.location.reload()}
+                              className="px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-bold transition-all text-sm"
+                          >
+                              {t('startNewDebate')}
+                          </button>
+                        </div>
                      </div>
                 )}
             </div>
@@ -899,7 +1332,7 @@ const App: React.FC = () => {
               </div>
 
               {isStudentTurn ? (
-                <div className="flex gap-4">
+                <div className="flex flex-col sm:flex-row gap-4">
                   <div className="flex-1 relative">
                     <textarea
                       value={inputText}
@@ -910,7 +1343,7 @@ const App: React.FC = () => {
                     />
                     
                     {/* Microphone / Voice Input Trigger */}
-                    <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2">
+                    <div className="hidden absolute bottom-4 left-4 z-10 items-center gap-2">
                       <button
                         type="button"
                         onClick={toggleRecording}
@@ -954,7 +1387,7 @@ const App: React.FC = () => {
                   <button
                     onClick={() => submitArgument(inputText)}
                     disabled={!inputText.trim() || isRecording || isTranscribing}
-                    className="px-10 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-900/20 active:scale-95 flex items-center justify-center gap-2"
+                    className="w-full sm:w-auto px-10 py-4 sm:py-0 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-900/20 active:scale-95 flex items-center justify-center gap-2"
                   >
                     {t('sendArgument')}
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

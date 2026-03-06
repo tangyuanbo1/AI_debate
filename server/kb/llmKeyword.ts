@@ -4,22 +4,23 @@ import { dropNumericHallucinationKeywords, filterKeywordsByBlacklist } from './k
 
 export async function llmExtractKeywords(opts: {
   query: string;
-  lang: 'zh-CN' | 'en-US';
+  lang: 'zh-CN' | 'en-US' | 'auto';
   minKeywords?: number;
 }): Promise<string[] | null> {
   const apiKey = getDashScopeApiKey();
   const minKeywords = opts.minKeywords ?? 4;
 
-  const prompt =
-    opts.lang === 'zh-CN'
-      ? `从下面问题中提取${minKeywords}~8个“检索关键词”，要求：
+  let prompt = '';
+  if (opts.lang === 'zh-CN') {
+    prompt = `从下面问题中提取${minKeywords}~8个“检索关键词”，要求：
 - 只输出 JSON 数组，例如 ["关键词1","关键词2"]
 - 关键词要具体，避免泛词（如何/什么/软件/标准 等）
 - 若包含数字/编码，必须来自原问题（不要编造）
 
 问题：
-${opts.query}`
-      : `Extract ${minKeywords}~8 search keywords from the question below.
+${opts.query}`;
+  } else if (opts.lang === 'en-US') {
+    prompt = `Extract ${minKeywords}~8 search keywords from the question below.
 Rules:
 - Output ONLY a JSON array, e.g. ["kw1","kw2"]
 - Be specific; avoid generic words (how/what/software/standard etc.)
@@ -27,11 +28,26 @@ Rules:
 
 Question:
 ${opts.query}`;
+  } else {
+    prompt = `Extract ${minKeywords}~8 search keywords from the question below / 从下面问题中提取${minKeywords}~8个检索关键词。
+Rules / 要求:
+- Output ONLY a JSON array / 只输出 JSON 数组，例如 ["kw1","kw2"]
+- Be specific; avoid generic words / 关键词要具体，避免泛词（如何/什么/软件/标准 等）
+- If a keyword contains numbers/codes, it MUST appear in the original question / 数字编码必须来自原问题（不要编造）
+
+Question / 问题:
+${opts.query}`;
+  }
 
   const messages: DashScopeMessage[] = [
     {
       role: 'system',
-      content: opts.lang === 'zh-CN' ? '你是一个严谨的信息检索关键词提取器。' : 'You are a strict information retrieval keyword extractor.',
+      content:
+        opts.lang === 'zh-CN'
+          ? '你是一个严谨的信息检索关键词提取器。'
+          : opts.lang === 'en-US'
+            ? 'You are a strict information retrieval keyword extractor.'
+            : 'You are a strict information retrieval keyword extractor / 你是一个严谨的信息检索关键词提取器。',
     },
     { role: 'user', content: prompt },
   ];
