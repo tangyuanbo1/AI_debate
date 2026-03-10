@@ -635,20 +635,80 @@ app.post('/api/debate/stream', async (req, res) => {
   try {
     const apiKey = getDashScopeApiKey();
 
-    const { topic, role, side, history, lang, kb } = (req.body ?? {}) as {
+    const { topic, role, side, history, lang, kb, freeDebate } = (req.body ?? {}) as {
       topic: string;
       role: string;
       side: 'PRO' | 'CON';
       history: DebateArgument[];
       lang?: ModelLang;
       kb?: KbConfig;
+      freeDebate?: {
+        kind: 'ai_attack' | 'ai_rebut' | 'ai_reply';
+        attackerName?: string;
+        targetSpeakerName?: string;
+        targetSide?: 'PRO' | 'CON';
+      };
     };
 
-    const prompt = buildDebatePrompt(topic, role, side, Array.isArray(history) ? history : []);
+    const safeHistory = Array.isArray(history) ? history : [];
     const effectiveLang: ModelLang = lang === 'zh-CN' || lang === 'en-US' ? lang : 'auto';
 
+    const basePrompt = buildDebatePrompt(topic, role, side, safeHistory);
+    const freeDebatePrompt =
+      freeDebate?.kind === 'ai_attack'
+        ? effectiveLang === 'zh-CN'
+          ? `
+自由辩论模式（AI 主动攻击）：
+- 你的身份：${freeDebate.attackerName ?? 'AI'}（反方）
+- 你要直接攻击并质询的对象：${freeDebate.targetSpeakerName ?? '对方辩手'}（正方）
+
+要求：
+- 用更锋利的交叉质询风格：先指出对方薄弱点，再提出 3-6 个紧凑的问题（可以连问），最后给出一个逼迫对方必须回应的追问。
+- 不要复述规则，不要客套，不要元叙事。
+`.trim()
+          : `
+Free debate (AI initiates attack):
+- You are: ${freeDebate.attackerName ?? 'AI'} (Con)
+- Target to challenge: ${freeDebate.targetSpeakerName ?? 'the opponent speaker'} (Pro)
+
+Requirements:
+- Use sharp cross-examination: call out weaknesses, then ask 3-6 tight questions, end with a forcing follow-up.
+- No meta talk, no politeness, no rule restatement.
+`.trim()
+        : freeDebate?.kind === 'ai_rebut'
+          ? effectiveLang === 'zh-CN'
+            ? `
+自由辩论模式（AI 反驳追打）：
+- 你刚刚发起了攻击，对方已回应。现在请你反驳对方的回应，并继续追问。
+
+要求：
+- 直接点名对方回应中的漏洞/偷换概念/未回答之处（至少 3 点）。
+- 每点都给出简短反驳，然后追加 1 个追问，迫使对方落到可检验的承诺上。
+`.trim()
+            : `
+Free debate (AI rebut & press):
+- You attacked, the human responded. Now rebut their response and keep pressing.
+
+Requirements:
+- Identify at least 3 concrete flaws/evaded questions.
+- For each, rebut briefly, then add one follow-up question to force a falsifiable commitment.
+`.trim()
+          : freeDebate?.kind === 'ai_reply'
+            ? effectiveLang === 'zh-CN'
+              ? `
+自由辩论模式（AI 回应反驳）：
+要求：针对对方最新发言进行反驳与追问，尽量具体，避免空泛。
+`.trim()
+              : `
+Free debate (AI reply/rebut):
+Requirement: rebut and question the opponent's latest point, be specific, avoid vagueness.
+`.trim()
+            : '';
+
+    const prompt = freeDebatePrompt ? `${freeDebatePrompt}\n\n${basePrompt}` : basePrompt;
+
     // 针对本回合构造检索 query（尽量贴近“对方刚说了什么 + 当前任务”）
-    const retrievalQuery = buildRetrievalQueryForDebate(topic, role, Array.isArray(history) ? history : []);
+    const retrievalQuery = buildRetrievalQueryForDebate(topic, role, safeHistory);
 
     const kbBuilt = await buildKbContext({ query: retrievalQuery, lang: effectiveLang, kb });
     const kbContext = typeof kbBuilt === 'string' ? kbBuilt : kbBuilt.context;
@@ -798,51 +858,77 @@ app.post('/api/judge', async (req, res) => {
     const kb = (req.body ?? {})?.kb as KbConfig | undefined;
 
     const promptZh = `
-你是“辩论竞技场”的首席法官。辩论已结束。
+你是“课堂辩论”的首席法官。辩论已结束。
 辩题：“${topic}”
 
 逐字稿：
 ${historyText}
 
 任务：
-请严格依据“逻辑、修辞、反驳有效性”进行评审，输出必须为简体中文，并使用 Markdown，格式如下：
+请严格依据“逻辑、修辞、反驳有效性、证据/事实支撑”进行评审。输出必须为简体中文，并使用 Markdown。
+
+你必须输出一个“逐个辩手”的量化与质化总结表格，然后给出判决与深度分析。
+
+## 📊 辩手表现总览（必须为表格）
+| 辩手 | 队伍 | 优点（要点） | 缺点（要点） | 代表性片段/论点（引用逐字稿） | 评分（0-10） |
+| --- | --- | --- | --- | --- | --- |
+| Student 1 | 正方 | ... | ... | ... | ... |
+| Student 2 | 正方 | ... | ... | ... | ... |
+| Student 3 | 正方 | ... | ... | ... | ... |
+| AI (Alpha) | 反方 | ... | ... | ... | ... |
+| AI (Beta) | 反方 | ... | ... | ... | ... |
+| AI (Gamma) | 反方 | ... | ... | ... | ... |
 
 ## 🏆 判决结果: [获胜方队伍名称]
+给出明确的获胜方，并用 3-6 条 bullet 解释关键胜负手。
 
-### 🌟 全场最佳辩手 (MVP)
-**姓名:** [姓名]
-**理由:** [举例说明]
+## 🌟 全场最佳辩手 (MVP)
+**姓名:** ...
+**理由:** 必须引用逐字稿中的具体论点或片段支撑。
 
-### 📉 待改进之处 (需努力)
-**姓名:** [姓名]
-**理由:** [逻辑漏洞或错失机会]
+## 📉 待改进之处（需努力）
+**姓名:** ...
+**理由:** 指出具体逻辑漏洞/反驳失误/表达问题，并给出 2-3 条改进建议。
 
-### ⚖️ 最终深度分析
-[详细分析关键交锋点与胜负原因]
+## ⚖️ 最终深度分析
+以“关键交锋点”为主线，解释为什么赢家赢（不要泛泛而谈），并指出输方如果想翻盘最该补哪三刀。
 `.trim();
 
     const promptEn = `
-You are the Chief Justice of the Debate Arena. The debate has concluded.
+You are the Chief Justice of a Classroom Debate. The debate has concluded.
 Topic: "${topic}"
 
 Transcript:
 ${historyText}
 
 Task:
-Evaluate strictly based on logic, rhetoric, and rebuttal effectiveness. Output MUST be in English and use Markdown with the following format:
+Evaluate strictly based on logic, rhetoric, rebuttal effectiveness, and evidence support. Output MUST be in English and use Markdown.
+
+You MUST produce a per-debater table first, then a verdict and deep analysis.
+
+## 📊 Scoreboard (must be a table)
+| Debater | Team | Strengths (bullets) | Weaknesses (bullets) | Evidence/Quote from transcript | Score (0-10) |
+| --- | --- | --- | --- | --- | --- |
+| Student 1 | Pro | ... | ... | ... | ... |
+| Student 2 | Pro | ... | ... | ... | ... |
+| Student 3 | Pro | ... | ... | ... | ... |
+| AI (Alpha) | Con | ... | ... | ... | ... |
+| AI (Beta) | Con | ... | ... | ... | ... |
+| AI (Gamma) | Con | ... | ... | ... | ... |
 
 ## 🏆 Verdict: [Winning team name]
+Give a clear winner and 3-6 bullets explaining the key deciding moments.
 
-### 🌟 MVP (Best Debater)
-**Name:** [Name]
-**Reason:** [Explain with examples]
+## 🌟 MVP (Best Debater)
+**Name:** ...
+**Reason:** MUST cite specific points/quotes from the transcript.
 
-### 📉 Needs Improvement
-**Name:** [Name]
-**Reason:** [Logical gaps or missed opportunities]
+## 📉 Needs Improvement
+**Name:** ...
+**Reason:** identify concrete logical gaps/missed rebuttals/style issues and give 2-3 actionable improvement tips.
 
-### ⚖️ Final Deep Analysis
-[Detailed analysis of key clashes and why the winner won]
+## ⚖️ Final Deep Analysis
+Walk through the key clashes and explain precisely why the winner won. Also suggest the top 3 changes the losing team needed to flip the outcome.
 `.trim();
 
     const promptAuto = `
@@ -914,6 +1000,123 @@ app.post('/api/transcribe', async (_req, res) => {
     error: 'Not implemented',
     detail: '语音转写未接入阿里云语音识别服务；如需要我可以继续补齐。',
   });
+});
+
+// ---- Free Debate: auto choose human target for AI attack ----
+app.post('/api/free-debate/choose-target', async (req, res) => {
+  try {
+    const apiKey = getDashScopeApiKey();
+    const { topic, history, candidates, attackerName, lang } = (req.body ?? {}) as {
+      topic: string;
+      history: DebateArgument[];
+      candidates: string[];
+      attackerName?: string;
+      lang?: ModelLang;
+    };
+
+    const list = Array.isArray(candidates) ? candidates.filter(Boolean).slice(0, 10) : [];
+    if (!topic || !Array.isArray(history) || !list.length) {
+      res.status(400).json({ ok: false, error: 'Missing topic/history/candidates' });
+      return;
+    }
+
+    const historyText = history
+      .slice(-30)
+      .map((arg) => `[${arg.side}] ${arg.speakerName}: ${arg.text}`)
+      .join('\n\n');
+    const effectiveLang: ModelLang = lang === 'zh-CN' || lang === 'en-US' ? lang : 'auto';
+
+    const sys =
+      effectiveLang === 'zh-CN'
+        ? '你是辩论教练。你只输出严格 JSON。'
+        : 'You are a debate coach. Output STRICT JSON only.';
+
+    const user =
+      effectiveLang === 'zh-CN'
+        ? `
+这是自由辩论环节。${attackerName ? `攻击者：${attackerName}\n` : ''}辩题：${topic}
+
+逐字稿（截取末尾）：
+${historyText}
+
+候选被攻击对象（只能从中选择一个）：
+${list.map((x) => `- ${x}`).join('\n')}
+
+任务：选择“最应该被攻击/追问”的那一位（比如：刚刚发言但漏洞最大、回避问题、论证最薄弱、出现明显逻辑跳跃的人）。
+
+只输出如下 JSON（不要 Markdown，不要多余文字）：
+{"targetSpeakerName":"<必须完全匹配候选列表之一>","reason":"一句话理由"}
+`.trim()
+        : `
+This is the free debate stage. ${attackerName ? `Attacker: ${attackerName}\n` : ''}Topic: ${topic}
+
+Transcript (tail excerpt):
+${historyText}
+
+Candidates (pick exactly one from this list):
+${list.map((x) => `- ${x}`).join('\n')}
+
+Task: choose the single best target to attack/press (e.g., just spoke but has the biggest holes, evaded questions, weakest reasoning, logical leaps).
+
+Output STRICT JSON only (no Markdown, no extra text):
+{"targetSpeakerName":"<must exactly match one candidate>","reason":"one-sentence reason"}
+`.trim();
+
+    const upstream = await fetch(dashscopeTextGenUrl(), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(
+        makeTextGenerationRequestBody({
+          model: 'qwen-plus',
+          messages: [
+            { role: 'system', content: sys },
+            { role: 'user', content: user },
+          ],
+          temperature: 0.2,
+          topP: 0.8,
+          stream: false,
+        }),
+      ),
+    });
+
+    if (!upstream.ok) {
+      const errText = await upstream.text().catch(() => '');
+      res.status(502).json({ ok: false, error: `DashScope error: ${upstream.status}`, detail: errText });
+      return;
+    }
+
+    const json = await upstream.json();
+    const text = extractTextFromDashScopePayload(json) ?? '';
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m?.[0]) {
+        try {
+          parsed = JSON.parse(m[0]);
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+
+    const chosen = String(parsed?.targetSpeakerName || '').trim();
+    const ok = list.includes(chosen);
+    const fallback = list[0];
+
+    res.json({
+      ok: true,
+      targetSpeakerName: ok ? chosen : fallback,
+      reason: String(parsed?.reason || '').trim(),
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || 'choose_target_failed' });
+  }
 });
 
 app.listen(PORT, () => {

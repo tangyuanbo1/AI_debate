@@ -32,4 +32,6 @@ export interface DebateSession {
   currentTurn: number; // 0 to 5 (S1, A1, S2, A2, S3, A3)
   history: Argument[];
   isStarted: boolean;
+  // structured: 固定 6 回合；freeDebate: 自由辩论；ended: 进入裁判/存档阶段
+  mode: 'structured' | 'freeDebate' | 'ended';
 }

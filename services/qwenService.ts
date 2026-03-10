@@ -41,7 +41,15 @@ export async function generateDebateResponseStream(
   side: DebateSide,
   history: Argument[],
   lang: 'zh-CN' | 'en-US' | 'auto',
-  kb?: { enabled?: boolean; selectedDocIds?: string[]; topK?: number; debug?: boolean }
+  kb?: { enabled?: boolean; selectedDocIds?: string[]; topK?: number; debug?: boolean },
+  extra?: {
+    freeDebate?: {
+      kind: 'ai_attack' | 'ai_rebut' | 'ai_reply';
+      attackerName?: string;
+      targetSpeakerName?: string;
+      targetSide?: 'PRO' | 'CON';
+    };
+  }
 ) {
   const resp = await fetch("/api/debate/stream", {
     method: "POST",
@@ -55,6 +63,7 @@ export async function generateDebateResponseStream(
       history,
       lang,
       kb,
+      ...extra,
     }),
   });
 

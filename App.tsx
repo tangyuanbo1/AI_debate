@@ -8,16 +8,105 @@ import { generateDebateResponseStream, generateJudgeVerdict, transcribeAudio } f
 import DebaterCard from './components/DebaterCard';
 
 const App: React.FC = () => {
-  // UI 仅保留英文：移除中文按钮与语言切换模块（底层逻辑不受影响）
-  const lang = 'en-US' as const;
+  type Language = 'zh-CN' | 'en-US';
+  const [lang, setLang] = useState<Language>(() => {
+    const saved = window.localStorage.getItem('lang');
+    return saved === 'en-US' || saved === 'zh-CN' ? saved : 'en-US';
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem('lang', lang);
+  }, [lang]);
 
   const t = useMemo(() => {
-    const dict: Record<typeof lang, Record<string, string>> = {
+    const dict: Record<Language, Record<string, string>> = {
+      'zh-CN': {
+        appTitle: '课堂辩论',
+        appSubtitle: '人类 vs 人工智能',
+        debateTopicLabel: '辩题',
+        debateTopicPlaceholder: '例如：海洋浮游生物有什么？',
+        flowTitle: '课堂辩论流程（说明）',
+        flowTeacher: '老师开场说明：介绍规则与评分标准',
+        flowSetup: '确定辩题：划分正反方与辩手（人方/AI 方各 1/2/3 辩）',
+        flowStructured: '结构化发言：开篇 → 反驳 → 总结（按顺序）',
+        flowFree: '自由辩论：可选择任意人方发言角色，指定任意 AI 回答角色，可连续攻防',
+        flowEnd: '结束自由辩论后进入裁判：输出表格化优缺点 + 判决 + 深度分析，可下载保存',
+        teamHumans: '人类队（正方）',
+        teamAI: 'AI队（反方）',
+        opening: '开篇陈词',
+        rebuttal: '反驳',
+        conclusion: '总结',
+        enterArena: '进入辩论场',
+        status: '状态',
+        live: '进行中',
+        reset: '重置',
+        waitingOpening: '等待 {name} 的开篇陈词…',
+        debateConcluded: '辩论结束',
+        timeForJudgment: '双方陈词已完毕，现在进入裁决。',
+        callForVerdict: '请求判决',
+        judgeThinking: '首席法官正在审阅逐字稿…',
+        sessionClosed: '本场已结束',
+        verdictDelivered: '判决已发布。',
+        startNewDebate: '开始新辩题',
+        currentPhase: '当前阶段：',
+        turnOf: '回合 {cur}/{total}',
+        markdownSupported: '支持 Markdown',
+        sendArgument: '发送观点',
+        aiSynthesizing: '{name} 正在组织反驳…',
+        judgeUnavailable: '裁判暂不可用。',
+        micNoAccess: '无法访问麦克风，请检查权限设置。',
+        transcriptionFailed: '语音转写失败，请重试。',
+        stopRecording: '停止录音',
+        clickToRecord: '点击录音',
+        recording: '录音中…',
+        transcribing: '转写中…',
+        verdictTitle: '首席法官判词',
+        verdictSubtitle: '最终评估与评分',
+        debateArena: '辩论竞技场',
+        kbTitle: '知识库',
+        kbEnable: '启用（对话前会检索并注入上下文）',
+        kbDebug: '调试输出',
+        kbUpload: '上传文件（.md / .pdf）',
+        kbNoFile: '未选择文件',
+        kbRefresh: '刷新列表',
+        kbSearch: '搜索文件名…',
+        kbClear: '清空',
+        kbNoDocs: '还没有入库文件。支持上传 .md 或 .pdf',
+        kbNeedOcr: '需先OCR',
+        kbStartOcr: '开始OCR',
+        kbPoll: '查询状态',
+        kbReset: '重置',
+        kbDelete: '删除',
+        kbDeleteConfirm: '确定删除该文件及其转换产物？',
+        kbCollapseOpen: '展开',
+        kbCollapseClose: '收起',
+        debateArchiveTitle: '历史辩论',
+        debateArchiveSearch: '搜索历史辩论（标题/辩题）…',
+        debateArchiveNoDocs: '暂无历史辩论存档',
+        debateArchiveOpen: '预览',
+        debateArchiveDownload: '下载',
+        debateArchiveDelete: '删除',
+        debateArchiveDeleteConfirm: '确定删除该辩论存档？',
+        debateSave: '保存为 Markdown',
+        debateSaveNamePlaceholder: '输入存档名称（可选）',
+        debateSaving: '保存中…',
+        freeDebateTitle: '自由辩论',
+        freeDebateHint: '选择人方发言者与 AI 回答者，可连续攻防。点击“结束自由辩论”进入裁判。',
+        freeDebateAttacker: '人方发言者',
+        freeDebateResponder: 'AI 回答者',
+        freeDebateEnd: '结束自由辩论',
+      },
       'en-US': {
         appTitle: 'Classroom Debate',
         appSubtitle: 'Humans vs. Artificial Intelligence',
         debateTopicLabel: 'Debate Topic',
         debateTopicPlaceholder: 'e.g., Should social media platforms be responsible for policing fake news?',
+        flowTitle: 'Classroom Debate Flow (Guide)',
+        flowTeacher: 'Teacher opening: explain rules and scoring',
+        flowSetup: 'Confirm topic & assign teams (Humans/AI each have 1st/2nd/3rd speaker)',
+        flowStructured: 'Structured rounds: Opening → Rebuttal → Conclusion (in order)',
+        flowFree: 'Free debate: choose any Human speaker and any AI responder; you may attack continuously',
+        flowEnd: 'End free debate → Judge produces table-based strengths/weaknesses + verdict + deep analysis; downloadable',
         teamHumans: 'Team Humans (Pro)',
         teamAI: 'Team AI (Con)',
         opening: 'Opening',
@@ -77,6 +166,11 @@ const App: React.FC = () => {
         debateSave: 'Save as Markdown',
         debateSaveNamePlaceholder: 'Archive name (optional)',
         debateSaving: 'Saving...',
+        freeDebateTitle: 'Free Debate',
+        freeDebateHint: 'Pick a Human speaker and an AI responder. You may attack continuously. Click “End Free Debate” to go to judging.',
+        freeDebateAttacker: 'Human speaker',
+        freeDebateResponder: 'AI responder',
+        freeDebateEnd: 'End Free Debate',
       },
     };
 
@@ -94,6 +188,7 @@ const App: React.FC = () => {
     currentTurn: 0,
     history: [],
     isStarted: false,
+    mode: 'structured',
   });
 
   // Knowledge Base (minimal UI)
@@ -402,10 +497,21 @@ const App: React.FC = () => {
     }
   }, [judgeVerdict]);
 
+  // 结构化 6 回合结束后，自动进入自由辩论（直到用户手动结束）
+  useEffect(() => {
+    if (!session.isStarted) return;
+    if (session.mode !== 'structured') return;
+    // 避免 TDZ：不要引用在文件更靠后声明的 const
+    const structuredOver = session.currentTurn >= DEBATE_SEQUENCE.length;
+    if (!structuredOver) return;
+    setSession((prev) => ({ ...prev, mode: 'freeDebate' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.isStarted, session.mode, session.currentTurn]);
+
   const handleStart = (e: React.FormEvent) => {
     e.preventDefault();
     if (session.topic.trim()) {
-      setSession(prev => ({ ...prev, isStarted: true }));
+      setSession(prev => ({ ...prev, isStarted: true, mode: 'structured', currentTurn: 0, history: [] }));
     }
   };
 
@@ -480,11 +586,12 @@ const App: React.FC = () => {
   };
   // -------------------------
 
-  const currentStep = DEBATE_SEQUENCE[session.currentTurn];
-  const isStudentTurn = !currentStep?.debater.isAI;
+  const currentStep = session.mode === 'structured' ? DEBATE_SEQUENCE[session.currentTurn] : null;
+  const isStudentTurn = Boolean(currentStep && !currentStep.debater.isAI);
 
   const submitArgument = async (text: string) => {
     if (!text.trim()) return;
+    if (!currentStep) return;
 
     const newArg: Argument = {
       id: Math.random().toString(36).substr(2, 9),
@@ -507,6 +614,136 @@ const App: React.FC = () => {
     if (nextTurn < DEBATE_SEQUENCE.length && DEBATE_SEQUENCE[nextTurn].debater.isAI) {
       triggerAi(nextTurn, [...session.history, newArg]);
     }
+  };
+
+  // Free debate: choose any human speaker + any AI responder, and allow continuous attacks.
+  const [freeAttackerId, setFreeAttackerId] = useState<string>(() => STUDENT_TEAM[0]?.id ?? 's1');
+  const [freeResponderId, setFreeResponderId] = useState<string>(() => AI_TEAM[0]?.id ?? 'a1');
+  const [freeAiAttackerId, setFreeAiAttackerId] = useState<string>(() => AI_TEAM[0]?.id ?? 'a1');
+  const [freeHumanTargetId, setFreeHumanTargetId] = useState<string>(() => STUDENT_TEAM[0]?.id ?? 's1');
+  const [pendingAiAttack, setPendingAiAttack] = useState<{ aiId: string; humanId: string } | null>(null);
+  const [autoAiTarget, setAutoAiTarget] = useState<boolean>(true);
+
+  const submitFreeDebate = async (text: string) => {
+    if (!text.trim()) return;
+    const attackerId = pendingAiAttack?.humanId ?? freeAttackerId;
+    const responderId = pendingAiAttack?.aiId ?? freeResponderId;
+    const attacker = STUDENT_TEAM.find((d) => d.id === attackerId) ?? STUDENT_TEAM[0];
+    const responder = AI_TEAM.find((d) => d.id === responderId) ?? AI_TEAM[0];
+    if (!attacker || !responder) return;
+
+    const newArg: Argument = {
+      id: Math.random().toString(36).substr(2, 9),
+      speakerId: attacker.id,
+      speakerName: attacker.name,
+      side: DebateSide.PRO,
+      text,
+      timestamp: Date.now(),
+    };
+
+    const nextHistory = [...session.history, newArg];
+    setSession((prev) => ({ ...prev, history: nextHistory }));
+    setInputText('');
+
+    // trigger selected AI responder immediately (reply or rebut depending on who initiated)
+    const kind: 'ai_reply' | 'ai_rebut' = pendingAiAttack ? 'ai_rebut' : 'ai_reply';
+    setPendingAiAttack(null);
+    triggerAiFreeDebate(responder, nextHistory, kind, attacker.name);
+  };
+
+  const triggerAiFreeDebate = async (
+    responder: (typeof AI_TEAM)[number],
+    currentHistory: Argument[],
+    kind: 'ai_attack' | 'ai_rebut' | 'ai_reply',
+    targetSpeakerName?: string,
+  ) => {
+    setIsAiThinking(true);
+    try {
+      const streamResponse = await generateDebateResponseStream(
+        session.topic,
+        responder.role,
+        DebateSide.CON,
+        currentHistory,
+        'auto',
+        { enabled: kbEnabled, selectedDocIds: kbSelectedDocIds, topK: 8, debug: kbDebug },
+        {
+          freeDebate: {
+            kind,
+            attackerName: responder.name,
+            targetSpeakerName,
+            targetSide: 'PRO',
+          },
+        },
+      );
+
+      const aiArgId = Math.random().toString(36).substr(2, 9);
+      let fullText = '';
+
+      for await (const chunk of streamResponse as any) {
+        if (chunk?.debug) {
+          console.groupCollapsed('[KB_DEBUG]');
+          console.log(chunk.debug);
+          console.groupEnd();
+          continue;
+        }
+        const textChunk = chunk?.text ?? '';
+        if (!textChunk) continue;
+        fullText += textChunk;
+
+        setSession((prev) => {
+          const existingIdx = prev.history.findIndex((x) => x.id === aiArgId);
+          const aiArg: Argument = {
+            id: aiArgId,
+            speakerId: responder.id,
+            speakerName: responder.name,
+            side: DebateSide.CON,
+            text: fullText,
+            timestamp: Date.now(),
+          };
+          const next = existingIdx >= 0 ? prev.history.map((x) => (x.id === aiArgId ? aiArg : x)) : [...prev.history, aiArg];
+          return { ...prev, history: next };
+        });
+      }
+    } catch (error) {
+      console.error('AI Generation Error', error);
+    } finally {
+      setIsAiThinking(false);
+    }
+  };
+
+  const startAiAttack = async () => {
+    const ai = AI_TEAM.find((d) => d.id === freeAiAttackerId) ?? AI_TEAM[0];
+    const human = STUDENT_TEAM.find((d) => d.id === freeHumanTargetId) ?? STUDENT_TEAM[0];
+    if (!ai || !human) return;
+    let chosenHuman = human;
+    if (autoAiTarget) {
+      try {
+        const resp = await fetch('/api/free-debate/choose-target', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic: session.topic,
+            history: session.history,
+            candidates: STUDENT_TEAM.map((d) => d.name),
+            attackerName: ai.name,
+            lang,
+          }),
+        });
+        const json = (await resp.json().catch(() => null)) as any;
+        const name = String(json?.targetSpeakerName || '').trim();
+        const found = STUDENT_TEAM.find((d) => d.name === name);
+        if (found) {
+          chosenHuman = found;
+          setFreeHumanTargetId(found.id);
+        }
+      } catch {
+        // ignore and fallback to manual selection
+      }
+    }
+
+    // AI 发起攻击：生成一段“质询/攻击”发言，然后等待指定学生回应
+    await triggerAiFreeDebate(ai, session.history, 'ai_attack', chosenHuman.name);
+    setPendingAiAttack({ aiId: ai.id, humanId: chosenHuman.id });
   };
 
   const triggerAi = async (turnIndex: number, currentHistory: Argument[]) => {
@@ -627,7 +864,30 @@ const App: React.FC = () => {
               {t('appTitle')}
             </h1>
             <p className="text-slate-400 text-lg">{t('appSubtitle')}</p>
-            {/* English-only UI: language switch removed */}
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setLang('zh-CN')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold border transition-colors ${
+                  lang === 'zh-CN'
+                    ? 'bg-slate-700 border-slate-500 text-white'
+                    : 'bg-slate-900/40 border-slate-700 text-slate-300 hover:bg-slate-700/40'
+                }`}
+              >
+                中文
+              </button>
+              <button
+                type="button"
+                onClick={() => setLang('en-US')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold border transition-colors ${
+                  lang === 'en-US'
+                    ? 'bg-slate-700 border-slate-500 text-white'
+                    : 'bg-slate-900/40 border-slate-700 text-slate-300 hover:bg-slate-700/40'
+                }`}
+              >
+                English
+              </button>
+            </div>
           </div>
           
           <form onSubmit={handleStart} className="space-y-6">
@@ -640,6 +900,17 @@ const App: React.FC = () => {
                 className="w-full h-28 sm:h-32 px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-white resize-none transition-all"
                 required
               />
+            </div>
+            
+            <div className="bg-slate-900/30 border border-slate-700 rounded-2xl p-4">
+              <div className="font-bold text-slate-200 mb-2">{t('flowTitle')}</div>
+              <ul className="text-sm text-slate-300 space-y-1">
+                <li>- {t('flowTeacher')}</li>
+                <li>- {t('flowSetup')}</li>
+                <li>- {t('flowStructured')}</li>
+                <li>- {t('flowFree')}</li>
+                <li>- {t('flowEnd')}</li>
+              </ul>
             </div>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1001,7 +1272,8 @@ const App: React.FC = () => {
     );
   }
 
-  const isDebateOver = session.currentTurn >= DEBATE_SEQUENCE.length;
+  const isInFreeDebate = session.mode === 'freeDebate';
+  const isDebateOver = session.mode === 'ended';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-lexend">
@@ -1041,23 +1313,23 @@ const App: React.FC = () => {
           <div className="mb-8 sm:mb-12">
             <div className="w-full flex items-center justify-start sm:justify-center gap-3 sm:gap-4 overflow-x-auto overflow-y-visible pb-3 px-1 flex-nowrap">
               {STUDENT_TEAM.map((d) => (
-                <DebaterCard
-                  key={d.id}
-                  debater={d}
-                  isActive={currentStep?.debater.id === d.id}
+                <DebaterCard 
+                  key={d.id} 
+                  debater={d} 
+                  isActive={currentStep?.debater.id === d.id} 
                   side="PRO"
                 />
               ))}
 
               <div className="shrink-0 px-2 sm:px-4">
                 <div className="text-xs sm:text-sm font-black text-slate-500 italic select-none">VS</div>
-              </div>
+            </div>
 
               {AI_TEAM.map((d) => (
-                <DebaterCard
-                  key={d.id}
-                  debater={d}
-                  isActive={currentStep?.debater.id === d.id}
+                <DebaterCard 
+                  key={d.id} 
+                  debater={d} 
+                  isActive={currentStep?.debater.id === d.id} 
                   side="CON"
                 />
               ))}
@@ -1122,7 +1394,7 @@ const App: React.FC = () => {
                       );
                     })()
                   ) : (
-                    <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">{arg.text}</p>
+                  <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">{arg.text}</p>
                   )}
                 </div>
               </div>
@@ -1156,7 +1428,7 @@ const App: React.FC = () => {
                         </div>
                         <div className="p-4 sm:p-8">
                             <ReactMarkdown components={verdictMarkdownComponents}>
-                              {judgeVerdict}
+                            {judgeVerdict}
                             </ReactMarkdown>
                         </div>
                     </div>
@@ -1214,25 +1486,27 @@ const App: React.FC = () => {
                           >
                             {isSavingDebate ? t('debateSaving') : t('debateSave')}
                           </button>
-                          <button 
-                              onClick={() => window.location.reload()}
-                              className="px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-bold transition-all text-sm"
-                          >
+                        <button 
+                            onClick={() => window.location.reload()}
+                            className="px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-bold transition-all text-sm"
+                        >
                               {t('startNewDebate')}
-                          </button>
+                        </button>
                         </div>
                      </div>
                 )}
             </div>
           ) : (
             <div className="space-y-4">
+              {session.mode === 'structured' && currentStep ? (
+                <>
               <div className="flex justify-between items-center text-sm">
                 <span className="flex items-center gap-2 text-slate-400">
                     <span className="w-3 h-3 bg-yellow-500 rounded-full animate-ping"></span>
-                    {t('currentPhase')} <strong className="text-white ml-1">{currentStep.label}</strong>
+                        {t('currentPhase')} <strong className="text-white ml-1">{currentStep.label}</strong>
                 </span>
                 <span className="text-slate-500">
-                    {t('turnOf', { cur: session.currentTurn + 1, total: DEBATE_SEQUENCE.length })}
+                        {t('turnOf', { cur: session.currentTurn + 1, total: DEBATE_SEQUENCE.length })}
                 </span>
               </div>
 
@@ -1310,6 +1584,139 @@ const App: React.FC = () => {
                   <p className="text-slate-400 text-sm font-medium tracking-wide italic">
                     {t('aiSynthesizing', { name: currentStep.debater.name })}
                   </p>
+                </div>
+              )}
+                </>
+              ) : (
+                // Free debate mode
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-black text-slate-200">{t('freeDebateTitle')}</div>
+                    <button
+                      type="button"
+                      onClick={() => setSession((prev) => ({ ...prev, mode: 'ended' }))}
+                      className="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-slate-900 font-bold rounded-xl transition-all shadow-lg shadow-yellow-900/20 active:scale-[0.98] text-sm"
+                    >
+                      {t('freeDebateEnd')}
+                    </button>
+                  </div>
+                  <div className="text-xs text-slate-500">{t('freeDebateHint')}</div>
+
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <label className="flex-1 text-xs text-slate-400">
+                      <div className="mb-1">{t('freeDebateAttacker')}</div>
+                      <select
+                        value={pendingAiAttack?.humanId ?? freeAttackerId}
+                        onChange={(e) => setFreeAttackerId(e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none"
+                        disabled={Boolean(pendingAiAttack)}
+                      >
+                        {STUDENT_TEAM.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex-1 text-xs text-slate-400">
+                      <div className="mb-1">{t('freeDebateResponder')}</div>
+                      <select
+                        value={pendingAiAttack?.aiId ?? freeResponderId}
+                        onChange={(e) => setFreeResponderId(e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none"
+                        disabled={Boolean(pendingAiAttack)}
+                      >
+                        {AI_TEAM.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <label className="flex-1 text-xs text-slate-400">
+                      <div className="mb-1">AI attacker</div>
+                      <select
+                        value={freeAiAttackerId}
+                        onChange={(e) => setFreeAiAttackerId(e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none"
+                        disabled={isAiThinking || Boolean(pendingAiAttack)}
+                      >
+                        {AI_TEAM.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex-1 text-xs text-slate-400">
+                      <div className="mb-1">Human target</div>
+                      <select
+                        value={freeHumanTargetId}
+                        onChange={(e) => setFreeHumanTargetId(e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none"
+                        disabled={isAiThinking || Boolean(pendingAiAttack) || autoAiTarget}
+                      >
+                        {STUDENT_TEAM.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-slate-300 bg-slate-800/40 border border-slate-700 rounded-xl px-3 py-2 shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={autoAiTarget}
+                        onChange={(e) => setAutoAiTarget(e.target.checked)}
+                        disabled={isAiThinking || Boolean(pendingAiAttack)}
+                      />
+                      Auto target
+                    </label>
+                    <button
+                      type="button"
+                      onClick={startAiAttack}
+                      disabled={isAiThinking || Boolean(pendingAiAttack)}
+                      className="px-6 py-3 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-black transition-all text-sm self-stretch"
+                      title="AI initiates an attack/question to the selected human"
+                    >
+                      AI Attack
+                    </button>
+                  </div>
+
+                  {pendingAiAttack && (
+                    <div className="text-xs text-yellow-300 bg-yellow-900/20 border border-yellow-700/40 rounded-xl p-3">
+                      AI has attacked. Please reply as{' '}
+                      <strong>{STUDENT_TEAM.find((d) => d.id === pendingAiAttack.humanId)?.name ?? 'the selected student'}</strong>
+                      . After you send, the AI will automatically rebut.
+                    </div>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <div className="flex-1 relative">
+                      <textarea
+                        value={inputText}
+                        onChange={(e) => setInputText(e.target.value)}
+                        placeholder={`Enter argument as ${
+                          STUDENT_TEAM.find((d) => d.id === (pendingAiAttack?.humanId ?? freeAttackerId))?.name ?? 'Student'
+                        }...`}
+                        className="w-full bg-slate-800 border-2 border-blue-500/30 focus:border-blue-500 rounded-2xl py-4 px-6 pr-24 outline-none text-white resize-none h-24 transition-all"
+                        disabled={isAiThinking}
+                      />
+                      <div className="absolute bottom-4 right-4 text-xs text-slate-500">
+                        {t('markdownSupported')}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => submitFreeDebate(inputText)}
+                      disabled={!inputText.trim() || isAiThinking}
+                      className="w-full sm:w-auto px-10 py-4 sm:py-0 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-900/20 active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      {t('sendArgument')}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
