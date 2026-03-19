@@ -790,17 +790,27 @@ const App: React.FC = () => {
     const sentence = q.sentences[q.nextToPlay];
     const url = await synthesizeSpeech(sentence, detectSpeakLang(sentence));
     if (!url) {
+      const remaining = q.sentences.slice(q.nextToPlay);
       ttsQueueRef.current = null;
-      setSpeakingArgId(null);
-      setTtsHighlightIndex(-1);
-      const remaining = q.sentences.slice(q.nextToPlay).join('');
-      if (remaining.trim() && window.speechSynthesis) {
-        const u = new SpeechSynthesisUtterance(remaining);
-        u.lang = detectSpeakLang(remaining);
-        u.onend = () => setSpeakingArgId((prev) => (prev === q.argId ? null : prev));
-        u.onerror = () => setSpeakingArgId((prev) => (prev === q.argId ? null : prev));
+      if (remaining.length > 0 && window.speechSynthesis) {
         setSpeakingArgId(q.argId);
-        window.speechSynthesis.speak(u);
+        const playNextBrowser = (idx: number) => {
+          if (idx >= remaining.length) {
+            setSpeakingArgId(null);
+            setTtsHighlightIndex(-1);
+            return;
+          }
+          setTtsHighlightIndex(q.nextToPlay + idx);
+          const u = new SpeechSynthesisUtterance(remaining[idx]);
+          u.lang = detectSpeakLang(remaining[idx]);
+          u.onend = () => playNextBrowser(idx + 1);
+          u.onerror = () => playNextBrowser(idx + 1);
+          window.speechSynthesis.speak(u);
+        };
+        playNextBrowser(0);
+      } else {
+        setSpeakingArgId(null);
+        setTtsHighlightIndex(-1);
       }
       return;
     }
@@ -1739,11 +1749,7 @@ const App: React.FC = () => {
                             </details>
                           )}
                           {speech && (
-                            <p
-                              className={`leading-relaxed text-slate-200 italic whitespace-pre-wrap ${
-                                speakingArgId === arg.id && ttsHighlightIndex === -1 ? 'bg-amber-500/10 rounded-lg px-1' : ''
-                              }`}
-                            >
+                            <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">
                               {(() => {
                                 const parts = speech.split(/(?<=[。！？.!?])\s*/);
                                 const complete = parts.filter((p) => /[。！？.!?]\s*$/.test(p.trim()));
