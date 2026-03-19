@@ -104,9 +104,7 @@ const App: React.FC = () => {
         freeDebateAttacker: '人方发言者',
         freeDebateResponder: 'AI 回答者',
         freeDebateEnd: '结束自由辩论',
-        tts: '语音播报',
-        qwenTts: '阿里云情感语音',
-        autoReadAi: 'AI 回复自动朗读',
+        tts: '情感语音播报',
         enterArgumentAs: '以 {name} 的身份发言…',
         speaking: '发言中',
         selectedStudent: '选中的学生',
@@ -137,6 +135,7 @@ const App: React.FC = () => {
         archiveVerdict: '判决',
         readAloud: '朗读',
         stopReading: '停止朗读',
+        thinkingExpand: '思考过程（点击展开）',
       },
       'en-US': {
         appTitle: 'Classroom Debate',
@@ -213,9 +212,7 @@ const App: React.FC = () => {
         freeDebateAttacker: 'Human speaker',
         freeDebateResponder: 'AI responder',
         freeDebateEnd: 'End Free Debate',
-        tts: 'TTS',
-        qwenTts: 'Alibaba emotional voice',
-        autoReadAi: 'Auto-read AI',
+        tts: 'Emotional TTS',
         enterArgumentAs: 'Enter argument as {name}...',
         speaking: 'Speaking',
         selectedStudent: 'the selected student',
@@ -246,6 +243,7 @@ const App: React.FC = () => {
         archiveVerdict: 'verdict',
         readAloud: 'Read aloud',
         stopReading: 'Stop reading',
+        thinkingExpand: 'Thinking (click to expand)',
       },
     };
 
@@ -464,25 +462,20 @@ const App: React.FC = () => {
   const audioChunksRef = useRef<Blob[]>([]);
   const speechRecRef = useRef<any>(null);
   const sttBaseTextRef = useRef<string>('');
+  const sttAccumulatedRef = useRef<string>('');
   const [sttSupported] = useState<boolean>(() => Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
 
-  // TTS (read aloud)
+  // TTS (情感语音播报：阿里云 Qwen + 自动朗读 AI + 朗读时高亮)
   const [ttsEnabled, setTtsEnabled] = useState<boolean>(() => window.localStorage.getItem('ttsEnabled') !== 'false');
-  const [ttsAutoAi, setTtsAutoAi] = useState<boolean>(() => window.localStorage.getItem('ttsAutoAi') === 'true');
-  const [qwenTtsEnabled, setQwenTtsEnabled] = useState<boolean>(() => window.localStorage.getItem('qwenTtsEnabled') !== 'false');
   const [speakingArgId, setSpeakingArgId] = useState<string | null>(null);
+  const [ttsHighlightIndex, setTtsHighlightIndex] = useState<number>(-1);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
+  const ttsQueueRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem('ttsEnabled', String(ttsEnabled));
   }, [ttsEnabled]);
-  useEffect(() => {
-    window.localStorage.setItem('ttsAutoAi', String(ttsAutoAi));
-  }, [ttsAutoAi]);
-  useEffect(() => {
-    window.localStorage.setItem('qwenTtsEnabled', String(qwenTtsEnabled));
-  }, [qwenTtsEnabled]);
 
   useEffect(() => () => stopTtsPlayback(), []);
 
@@ -648,20 +641,23 @@ const App: React.FC = () => {
         const rec = new SpeechRecognitionCtor();
         speechRecRef.current = rec;
         sttBaseTextRef.current = inputText ? `${inputText.trim()} ` : '';
+        sttAccumulatedRef.current = '';
         rec.continuous = true;
         rec.interimResults = true;
         rec.lang = lang === 'zh-CN' ? 'zh-CN' : 'en-US';
 
         rec.onresult = (event: any) => {
-          let finalText = '';
           let interimText = '';
           for (let i = event.resultIndex; i < event.results.length; i += 1) {
             const res = event.results[i];
             const transcript = String(res?.[0]?.transcript ?? '');
-            if (res.isFinal) finalText += transcript;
-            else interimText += transcript;
+            if (res.isFinal) {
+              sttAccumulatedRef.current += transcript;
+            } else {
+              interimText += transcript;
+            }
           }
-          const merged = `${sttBaseTextRef.current}${(finalText + interimText).trim()}`.trim();
+          const merged = `${sttBaseTextRef.current}${sttAccumulatedRef.current}${interimText}`.trim();
           setInputText(merged);
         };
 
@@ -779,40 +775,111 @@ const App: React.FC = () => {
     if (synth) synth.cancel();
   };
 
+  const splitSentences = (text: string): string[] => {
+    return text.split(/(?<=[。！？.!?])\s*/).filter((s) => s.trim() && /[。！？.!?]\s*$/.test(s.trim()));
+  };
+
+  const playNextInQueue = async () => {
+    const q = ttsQueueRef.current;
+    if (!q || q.nextToPlay >= q.sentences.length) {
+      setSpeakingArgId(null);
+      setTtsHighlightIndex(-1);
+      ttsQueueRef.current = null;
+      return;
+    }
+    const sentence = q.sentences[q.nextToPlay];
+    setTtsHighlightIndex(q.nextToPlay);
+    const url = await synthesizeSpeech(sentence, detectSpeakLang(sentence));
+    if (!url) {
+      ttsQueueRef.current = q;
+      q.nextToPlay += 1;
+      playNextInQueue();
+      return;
+    }
+    const audio = new Audio(url);
+    ttsAudioRef.current = audio;
+    ttsUrlRef.current = url;
+    audio.onended = () => {
+      if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
+      ttsUrlRef.current = null;
+      ttsAudioRef.current = null;
+      if (ttsQueueRef.current) ttsQueueRef.current.nextToPlay += 1;
+      playNextInQueue();
+    };
+    audio.onerror = () => {
+      if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
+      ttsUrlRef.current = null;
+      ttsAudioRef.current = null;
+      if (ttsQueueRef.current) ttsQueueRef.current.nextToPlay += 1;
+      playNextInQueue();
+    };
+    audio.play().catch(() => {
+      if (ttsQueueRef.current) ttsQueueRef.current.nextToPlay += 1;
+      playNextInQueue();
+    });
+  };
+
+  const feedStreamingTts = (argId: string, fullText: string) => {
+    if (!ttsEnabled) return;
+    const { speech } = parseThinkingSpeech(fullText);
+    const raw = (speech || '').trim();
+    if (!raw) return;
+    const sentences = splitSentences(raw);
+    if (sentences.length === 0) return;
+    const q = ttsQueueRef.current;
+    if (q?.argId !== argId) {
+      ttsQueueRef.current = { argId, sentences, nextToPlay: 0 };
+      setSpeakingArgId(argId);
+      if (!ttsAudioRef.current) playNextInQueue();
+    } else {
+      ttsQueueRef.current = { ...q, sentences };
+      if (!ttsAudioRef.current) playNextInQueue();
+    }
+  };
+
   const speakText = async (argId: string, text: string) => {
     if (!ttsEnabled) return;
     if (!text?.trim()) return;
     if (speakingArgId === argId) {
       stopTtsPlayback();
       setSpeakingArgId(null);
+      setTtsHighlightIndex(-1);
+      ttsQueueRef.current = null;
       return;
     }
     stopTtsPlayback();
+    ttsQueueRef.current = null;
     setSpeakingArgId(argId);
+    setTtsHighlightIndex(-1);
 
+    const sentences = splitSentences(text);
     const onEnd = () => setSpeakingArgId((prev) => (prev === argId ? null : prev));
 
-    if (qwenTtsEnabled) {
-      const url = await synthesizeSpeech(text, detectSpeakLang(text));
-      if (url) {
-        const audio = new Audio(url);
-        ttsAudioRef.current = audio;
-        ttsUrlRef.current = url;
-        audio.onended = () => {
-          if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
-          ttsUrlRef.current = null;
-          ttsAudioRef.current = null;
-          onEnd();
-        };
-        audio.onerror = () => {
-          if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
-          ttsUrlRef.current = null;
-          ttsAudioRef.current = null;
-          onEnd();
-        };
-        audio.play().catch(() => onEnd());
-        return;
-      }
+    if (sentences.length > 0) {
+      ttsQueueRef.current = { argId, sentences, nextToPlay: 0 };
+      playNextInQueue();
+      return;
+    }
+
+    const url = await synthesizeSpeech(text, detectSpeakLang(text));
+    if (url) {
+      const audio = new Audio(url);
+      ttsAudioRef.current = audio;
+      ttsUrlRef.current = url;
+      audio.onended = () => {
+        if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
+        ttsUrlRef.current = null;
+        ttsAudioRef.current = null;
+        onEnd();
+      };
+      audio.onerror = () => {
+        if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
+        ttsUrlRef.current = null;
+        ttsAudioRef.current = null;
+        onEnd();
+      };
+      audio.play().catch(() => onEnd());
+      return;
     }
 
     const synth = window.speechSynthesis;
@@ -899,13 +966,17 @@ const App: React.FC = () => {
     targetSpeakerName?: string,
   ) => {
     setIsAiThinking(true);
+    stopTtsPlayback();
+    setSpeakingArgId(null);
+    setTtsHighlightIndex(-1);
+    ttsQueueRef.current = null;
     try {
       const streamResponse = await generateDebateResponseStream(
         session.topic,
         responder.role,
         DebateSide.CON,
         currentHistory,
-        'auto',
+        lang,
         { enabled: kbEnabled, selectedDocIds: kbSelectedDocIds, topK: 8, debug: kbDebug },
         {
           freeDebate: {
@@ -930,6 +1001,7 @@ const App: React.FC = () => {
         const textChunk = chunk?.text ?? '';
         if (!textChunk) continue;
         fullText += textChunk;
+        if (ttsEnabled) feedStreamingTts(aiArgId, fullText);
 
         setSession((prev) => {
           const existingIdx = prev.history.findIndex((x) => x.id === aiArgId);
@@ -944,6 +1016,11 @@ const App: React.FC = () => {
           const next = existingIdx >= 0 ? prev.history.map((x) => (x.id === aiArgId ? aiArg : x)) : [...prev.history, aiArg];
           return { ...prev, history: next };
         });
+      }
+      if (ttsEnabled) {
+        const { speech } = parseThinkingSpeech(fullText);
+        const toRead = (speech || fullText || '').trim();
+        if (toRead && !ttsQueueRef.current) speakText(aiArgId, toRead);
       }
     } catch (error) {
       console.error('AI Generation Error', error);
@@ -989,6 +1066,10 @@ const App: React.FC = () => {
 
   const triggerAi = async (turnIndex: number, currentHistory: Argument[]) => {
     setIsAiThinking(true);
+    stopTtsPlayback();
+    setSpeakingArgId(null);
+    setTtsHighlightIndex(-1);
+    ttsQueueRef.current = null;
     const step = DEBATE_SEQUENCE[turnIndex];
     
     try {
@@ -997,7 +1078,7 @@ const App: React.FC = () => {
         step.debater.role,
         DebateSide.CON,
         currentHistory,
-        'auto',
+        lang,
         { enabled: kbEnabled, selectedDocIds: kbSelectedDocIds, topK: 8, debug: kbDebug }
       );
 
@@ -1014,7 +1095,8 @@ const App: React.FC = () => {
         const text = chunk.text;
         if (text) {
           fullText += text;
-          
+          if (ttsEnabled) feedStreamingTts(aiArgId, fullText);
+
           if (isFirstChunk) {
             setIsAiThinking(false); // Stop thinking animation, show bubble
             // Initialize the AI argument in the history
@@ -1050,11 +1132,10 @@ const App: React.FC = () => {
         currentTurn: prev.currentTurn + 1,
       }));
 
-      // Optional: auto read AI speech when done
-      if (ttsEnabled && ttsAutoAi) {
+      if (ttsEnabled) {
         const { speech } = parseThinkingSpeech(fullText);
         const toRead = (speech || fullText || '').trim();
-        if (toRead) speakText(aiArgId, toRead);
+        if (toRead && !ttsQueueRef.current) speakText(aiArgId, toRead);
       }
 
     } catch (error) {
@@ -1066,7 +1147,7 @@ const App: React.FC = () => {
 
   const handleCallJudge = async () => {
     setIsJudgeThinking(true);
-    const verdict = await generateJudgeVerdict(session.topic, session.history, 'auto', {
+    const verdict = await generateJudgeVerdict(session.topic, session.history, lang, {
       enabled: kbEnabled,
       selectedDocIds: kbSelectedDocIds,
       topK: 8,
@@ -1646,7 +1727,7 @@ const App: React.FC = () => {
                         }`}
                         title={speakingArgId === arg.id ? t('stopReading') : t('readAloud')}
                       >
-                        {speakingArgId === arg.id ? 'Stop' : 'Read'}
+                        {speakingArgId === arg.id ? t('stopReading') : t('readAloud')}
                       </button>
                     )}
                   </div>
@@ -1661,7 +1742,7 @@ const App: React.FC = () => {
                               open={isThinkingPhase ? true : undefined}
                             >
                               <summary className="cursor-pointer text-xs font-bold text-slate-300 select-none">
-                                Thinking (click to expand)
+                                {t('thinkingExpand')}
                               </summary>
                               <pre className="mt-2 text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
                                 {thinking}
@@ -1669,7 +1750,30 @@ const App: React.FC = () => {
                             </details>
                           )}
                           {speech && (
-                            <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">{speech}</p>
+                            <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">
+                              {(() => {
+                                const parts = speech.split(/(?<=[。！？.!?])\s*/);
+                                const complete = parts.filter((p) => /[。！？.!?]\s*$/.test(p.trim()));
+                                const remainder = parts.length > complete.length ? parts.slice(complete.length).join('') : '';
+                                return (
+                                  <>
+                                    {complete.map((sent, i) => (
+                                      <span
+                                        key={i}
+                                        className={
+                                          speakingArgId === arg.id && ttsHighlightIndex === i
+                                            ? 'bg-yellow-500/20 rounded px-0.5 -mx-0.5'
+                                            : ''
+                                        }
+                                      >
+                                        {sent}
+                                      </span>
+                                    ))}
+                                    {remainder ? <span>{remainder}</span> : null}
+                                  </>
+                                );
+                              })()}
+                            </p>
                           )}
                         </div>
                       );
@@ -1791,23 +1895,10 @@ const App: React.FC = () => {
                 </span>
               </div>
 
-                  <div className="flex items-center justify-end gap-4">
-                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <div className="flex items-center justify-end">
+                    <label className="flex items-center gap-2 text-xs text-slate-300" title={lang === 'zh-CN' ? '阿里云情感语音播报，AI 回复自动朗读，读到哪里高亮哪里' : 'Alibaba emotional TTS, auto-read AI, highlight while reading'}>
                       <input type="checkbox" checked={ttsEnabled} onChange={(e) => setTtsEnabled(e.target.checked)} />
                       {t('tts')}
-                    </label>
-                    <label className="flex items-center gap-2 text-xs text-slate-300" title={lang === 'zh-CN' ? '使用阿里云 Qwen3-TTS 情感语音，更有表现力' : 'Use Alibaba Qwen3-TTS for expressive voice'}>
-                      <input type="checkbox" checked={qwenTtsEnabled} onChange={(e) => setQwenTtsEnabled(e.target.checked)} disabled={!ttsEnabled} />
-                      {t('qwenTts')}
-                    </label>
-                    <label className="flex items-center gap-2 text-xs text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={ttsAutoAi}
-                        onChange={(e) => setTtsAutoAi(e.target.checked)}
-                        disabled={!ttsEnabled}
-                      />
-                      {t('autoReadAi')}
                     </label>
               </div>
 

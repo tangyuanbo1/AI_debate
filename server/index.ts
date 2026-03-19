@@ -719,32 +719,32 @@ Requirement: rebut and question the opponent's latest point, be specific, avoid 
     const formatInstruction =
       effectiveLang === 'zh-CN'
         ? `
+【重要】THINKING 和 SPEECH 必须全部使用简体中文，禁止混用英文。
 请严格按以下格式输出（不要输出其它内容，不要加解释）：
 [[THINKING]]
-请先输出 THINKING，再输出 SPEECH。
-用一段连贯的文字说明你的推理路线（可读、不要暴露详细推理链）。
+请先输出 THINKING，再输出 SPEECH。用一段连贯的中文说明你的推理路线（可读、不要暴露详细推理链）。
 [[/THINKING]]
 [[SPEECH]]
-（辩论发言正文）
+（辩论发言正文，必须为简体中文）
 [[/SPEECH]]
 `.trim()
         : effectiveLang === 'en-US'
           ? `
+【IMPORTANT】THINKING and SPEECH must ALL be in English. Do NOT mix with Chinese.
 Output strictly in this format (no extra text, no explanations):
 [[THINKING]]
-You MUST output THINKING first, then SPEECH.
-Write ONE coherent paragraph describing your reasoning route (readable; do NOT reveal detailed chain-of-thought).
+You MUST output THINKING first, then SPEECH. Write ONE coherent paragraph in English describing your reasoning route (readable; do NOT reveal detailed chain-of-thought).
 [[/THINKING]]
 [[SPEECH]]
-(the debate speech)
+(the debate speech, must be in English)
 [[/SPEECH]]
 `.trim()
           : `
-Output strictly in this format (no extra text, no explanations):
+Output strictly in this format (no extra text, no explanations).
+Use the same language as the debate topic/opponent messages for BOTH THINKING and SPEECH. Do NOT mix languages.
 [[THINKING]]
 You MUST output THINKING first, then SPEECH.
 Write ONE coherent paragraph describing your reasoning route (readable; do NOT reveal detailed chain-of-thought).
-Also, use the same language as the debate topic/opponent messages.
 [[/THINKING]]
 [[SPEECH]]
 (the debate speech)
@@ -756,10 +756,10 @@ Also, use the same language as the debate topic/opponent messages.
         role: 'system',
         content:
           effectiveLang === 'zh-CN'
-            ? '你是世界级辩手。输出必须包含 THINKING 和 发言正文。'
+            ? '你是世界级辩手。输出必须包含 THINKING 和发言正文。THINKING 和 SPEECH 必须全部使用简体中文，禁止混用英文。'
             : effectiveLang === 'en-US'
-              ? 'You are a world-class debater. Output MUST include THINKING and the speech.'
-              : 'You are a world-class debater. Output MUST include THINKING and the speech. Use the same language as the debate content.',
+              ? 'You are a world-class debater. Output MUST include THINKING and the speech. THINKING and SPEECH must ALL be in English. Do NOT mix with Chinese.'
+              : 'You are a world-class debater. Output MUST include THINKING and the speech. Use the same language as the debate content for both. Do NOT mix languages.',
       },
       { role: 'user', content: `${formatInstruction}\n\n${prompt}${kbContext}` },
     ];
