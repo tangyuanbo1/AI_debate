@@ -788,14 +788,23 @@ const App: React.FC = () => {
       return;
     }
     const sentence = q.sentences[q.nextToPlay];
-    setTtsHighlightIndex(q.nextToPlay);
     const url = await synthesizeSpeech(sentence, detectSpeakLang(sentence));
     if (!url) {
-      ttsQueueRef.current = q;
-      q.nextToPlay += 1;
-      playNextInQueue();
+      ttsQueueRef.current = null;
+      setSpeakingArgId(null);
+      setTtsHighlightIndex(-1);
+      const remaining = q.sentences.slice(q.nextToPlay).join('');
+      if (remaining.trim() && window.speechSynthesis) {
+        const u = new SpeechSynthesisUtterance(remaining);
+        u.lang = detectSpeakLang(remaining);
+        u.onend = () => setSpeakingArgId((prev) => (prev === q.argId ? null : prev));
+        u.onerror = () => setSpeakingArgId((prev) => (prev === q.argId ? null : prev));
+        setSpeakingArgId(q.argId);
+        window.speechSynthesis.speak(u);
+      }
       return;
     }
+    setTtsHighlightIndex(q.nextToPlay);
     const audio = new Audio(url);
     ttsAudioRef.current = audio;
     ttsUrlRef.current = url;
@@ -819,6 +828,7 @@ const App: React.FC = () => {
     });
   };
 
+  const feedStreamingTtsLastSentCountRef = useRef<number>(0);
   const feedStreamingTts = (argId: string, fullText: string) => {
     if (!ttsEnabled) return;
     const { speech } = parseThinkingSpeech(fullText);
@@ -826,6 +836,8 @@ const App: React.FC = () => {
     if (!raw) return;
     const sentences = splitSentences(raw);
     if (sentences.length === 0) return;
+    if (sentences.length <= feedStreamingTtsLastSentCountRef.current) return;
+    feedStreamingTtsLastSentCountRef.current = sentences.length;
     const q = ttsQueueRef.current;
     if (q?.argId !== argId) {
       ttsQueueRef.current = { argId, sentences, nextToPlay: 0 };
@@ -970,6 +982,7 @@ const App: React.FC = () => {
     setSpeakingArgId(null);
     setTtsHighlightIndex(-1);
     ttsQueueRef.current = null;
+    feedStreamingTtsLastSentCountRef.current = 0;
     try {
       const streamResponse = await generateDebateResponseStream(
         session.topic,
@@ -1070,6 +1083,7 @@ const App: React.FC = () => {
     setSpeakingArgId(null);
     setTtsHighlightIndex(-1);
     ttsQueueRef.current = null;
+    feedStreamingTtsLastSentCountRef.current = 0;
     const step = DEBATE_SEQUENCE[turnIndex];
     
     try {
