@@ -112,8 +112,9 @@ export async function transcribeAudio(_base64Audio: string, _mimeType: string): 
 }
 
 let ttsApiFailed = false;
+let ttsApiErrorLogged = false;
 
-/** 阿里云 Qwen3-TTS 情感语音合成，返回可播放的 Blob URL，用完后需 revokeObjectURL */
+/** 阿里云 Qwen3-TTS 情感语音合成，返回可播放的 Blob URL，用完后需 revokeObjectURL。404 时静默回退到浏览器 TTS。 */
 export async function synthesizeSpeech(text: string, lang: 'zh-CN' | 'en-US'): Promise<string | null> {
   if (ttsApiFailed) return null;
   try {
@@ -123,16 +124,21 @@ export async function synthesizeSpeech(text: string, lang: 'zh-CN' | 'en-US'): P
       body: JSON.stringify({ text: text.trim(), lang }),
     });
     if (!resp.ok) {
-      if (resp.status === 404) ttsApiFailed = true;
-      const err = await resp.json().catch(() => ({}));
-      console.error('TTS error', resp.status, err);
+      ttsApiFailed = true;
+      if (!ttsApiErrorLogged) {
+        ttsApiErrorLogged = true;
+        console.warn('[TTS] API 不可用 (404)，已切换为浏览器语音朗读');
+      }
       return null;
     }
     const blob = await resp.blob();
     return URL.createObjectURL(blob);
   } catch (e) {
     ttsApiFailed = true;
-    console.error('TTS failed', e);
+    if (!ttsApiErrorLogged) {
+      ttsApiErrorLogged = true;
+      console.warn('[TTS] 请求失败，已切换为浏览器语音朗读', e);
+    }
     return null;
   }
 }

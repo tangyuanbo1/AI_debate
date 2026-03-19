@@ -803,7 +803,12 @@ const App: React.FC = () => {
       return;
     }
     const sentence = q.sentences[q.nextToPlay];
-    const url = await synthesizeSpeech(sentence, detectSpeakLang(sentence));
+    let url: string | null = null;
+    try {
+      url = await synthesizeSpeech(sentence, detectSpeakLang(sentence));
+    } catch {
+      url = null;
+    }
     if (!url) {
       const remaining = q.sentences.slice(q.nextToPlay);
       ttsQueueRef.current = null;
@@ -886,7 +891,12 @@ const App: React.FC = () => {
       return;
     }
 
-    const url = await synthesizeSpeech(text, detectSpeakLang(text));
+    let url: string | null = null;
+    try {
+      url = await synthesizeSpeech(text, detectSpeakLang(text));
+    } catch {
+      url = null;
+    }
     if (url) {
       const audio = new Audio(url);
       ttsAudioRef.current = audio;
