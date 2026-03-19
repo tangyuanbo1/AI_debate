@@ -111,4 +111,25 @@ export async function transcribeAudio(_base64Audio: string, _mimeType: string): 
   return "";
 }
 
+/** 阿里云 Qwen3-TTS 情感语音合成，返回可播放的 Blob URL，用完后需 revokeObjectURL */
+export async function synthesizeSpeech(text: string, lang: 'zh-CN' | 'en-US'): Promise<string | null> {
+  try {
+    const resp = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text.trim(), lang }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('TTS error', resp.status, err);
+      return null;
+    }
+    const blob = await resp.blob();
+    return URL.createObjectURL(blob);
+  } catch (e) {
+    console.error('TTS failed', e);
+    return null;
+  }
+}
+
 

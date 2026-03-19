@@ -1002,6 +1002,74 @@ app.post('/api/transcribe', async (_req, res) => {
   });
 });
 
+// ---- 语音合成 TTS（阿里云 Qwen3-TTS-Instruct-Flash，支持情感指令） ----
+const TTS_PATH = '/api/v1/services/aigc/multimodal-generation/generation';
+function dashscopeTtsUrl(): string {
+  const base = globalConfig.dashscopeBaseUrl || 'https://dashscope.aliyuncs.com';
+  return `${base}${TTS_PATH}`;
+}
+
+app.post('/api/tts', async (req, res) => {
+  try {
+    const apiKey = getDashScopeApiKey();
+    const { text, lang } = (req.body ?? {}) as { text?: string; lang?: string };
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      res.status(400).json({ error: 'Missing text' });
+      return;
+    }
+    const isChinese = (lang === 'zh-CN' || /[\u4e00-\u9fff]/.test(text));
+    const languageType = isChinese ? 'Chinese' : 'English';
+    const instructions = isChinese
+      ? '语速适中，语气坚定有力、富有说服力，适合辩论发言场景，带有适度的情感起伏。'
+      : 'Moderate pace, firm and persuasive tone, suitable for debate speech, with moderate emotional variation.';
+
+    const ttsBody = {
+      model: 'qwen3-tts-instruct-flash',
+      input: {
+        text: text.trim().slice(0, 5000),
+        voice: 'Cherry',
+        language_type: languageType,
+        instructions,
+        optimize_instructions: true,
+      },
+    };
+
+    const upstream = await fetch(dashscopeTtsUrl(), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(ttsBody),
+    });
+
+    if (!upstream.ok) {
+      const errText = await upstream.text();
+      res.status(upstream.status).json({ error: `TTS API error: ${errText}` });
+      return;
+    }
+
+    const json = (await upstream.json()) as any;
+    const audioUrl = json?.output?.audio?.url;
+    if (!audioUrl || typeof audioUrl !== 'string') {
+      res.status(502).json({ error: 'TTS response missing audio URL', raw: json });
+      return;
+    }
+
+    const audioResp = await fetch(audioUrl);
+    if (!audioResp.ok) {
+      res.status(502).json({ error: 'Failed to fetch TTS audio' });
+      return;
+    }
+    const contentType = audioResp.headers.get('Content-Type') || 'audio/wav';
+    const audioBuffer = await audioResp.arrayBuffer();
+    res.setHeader('Content-Type', contentType);
+    res.send(Buffer.from(audioBuffer));
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'TTS failed' });
+  }
+});
+
 // ---- Free Debate: auto choose human target for AI attack ----
 app.post('/api/free-debate/choose-target', async (req, res) => {
   try {
