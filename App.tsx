@@ -472,6 +472,7 @@ const App: React.FC = () => {
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
   const ttsQueueRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
+  const streamingTtsArgIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem('ttsEnabled', String(ttsEnabled));
@@ -840,6 +841,7 @@ const App: React.FC = () => {
     feedStreamingTtsLastSentCountRef.current = sentences.length;
     const q = ttsQueueRef.current;
     if (q?.argId !== argId) {
+      streamingTtsArgIdRef.current = argId;
       ttsQueueRef.current = { argId, sentences, nextToPlay: 0 };
       setSpeakingArgId(argId);
       if (!ttsAudioRef.current) playNextInQueue();
@@ -982,6 +984,7 @@ const App: React.FC = () => {
     setSpeakingArgId(null);
     setTtsHighlightIndex(-1);
     ttsQueueRef.current = null;
+    streamingTtsArgIdRef.current = null;
     feedStreamingTtsLastSentCountRef.current = 0;
     try {
       const streamResponse = await generateDebateResponseStream(
@@ -1033,7 +1036,7 @@ const App: React.FC = () => {
       if (ttsEnabled) {
         const { speech } = parseThinkingSpeech(fullText);
         const toRead = (speech || fullText || '').trim();
-        if (toRead && !ttsQueueRef.current) speakText(aiArgId, toRead);
+        if (toRead && streamingTtsArgIdRef.current !== aiArgId) speakText(aiArgId, toRead);
       }
     } catch (error) {
       console.error('AI Generation Error', error);
@@ -1083,6 +1086,7 @@ const App: React.FC = () => {
     setSpeakingArgId(null);
     setTtsHighlightIndex(-1);
     ttsQueueRef.current = null;
+    streamingTtsArgIdRef.current = null;
     feedStreamingTtsLastSentCountRef.current = 0;
     const step = DEBATE_SEQUENCE[turnIndex];
     
@@ -1149,7 +1153,7 @@ const App: React.FC = () => {
       if (ttsEnabled) {
         const { speech } = parseThinkingSpeech(fullText);
         const toRead = (speech || fullText || '').trim();
-        if (toRead && !ttsQueueRef.current) speakText(aiArgId, toRead);
+        if (toRead && streamingTtsArgIdRef.current !== aiArgId) speakText(aiArgId, toRead);
       }
 
     } catch (error) {
@@ -1764,7 +1768,11 @@ const App: React.FC = () => {
                             </details>
                           )}
                           {speech && (
-                            <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">
+                            <p
+                              className={`leading-relaxed text-slate-200 italic whitespace-pre-wrap ${
+                                speakingArgId === arg.id && ttsHighlightIndex === -1 ? 'bg-amber-500/10 rounded-lg px-1' : ''
+                              }`}
+                            >
                               {(() => {
                                 const parts = speech.split(/(?<=[。！？.!?])\s*/);
                                 const complete = parts.filter((p) => /[。！？.!?]\s*$/.test(p.trim()));
@@ -1776,7 +1784,7 @@ const App: React.FC = () => {
                                         key={i}
                                         className={
                                           speakingArgId === arg.id && ttsHighlightIndex === i
-                                            ? 'bg-yellow-500/20 rounded px-0.5 -mx-0.5'
+                                            ? 'bg-amber-400/35 text-amber-100 rounded px-1 -mx-0.5 transition-colors duration-200'
                                             : ''
                                         }
                                       >
