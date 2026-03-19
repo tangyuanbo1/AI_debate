@@ -472,7 +472,6 @@ const App: React.FC = () => {
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
   const ttsQueueRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
-  const streamingTtsArgIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem('ttsEnabled', String(ttsEnabled));
@@ -829,28 +828,6 @@ const App: React.FC = () => {
     });
   };
 
-  const feedStreamingTtsLastSentCountRef = useRef<number>(0);
-  const feedStreamingTts = (argId: string, fullText: string) => {
-    if (!ttsEnabled) return;
-    const { speech } = parseThinkingSpeech(fullText);
-    const raw = (speech || '').trim();
-    if (!raw) return;
-    const sentences = splitSentences(raw);
-    if (sentences.length === 0) return;
-    if (sentences.length <= feedStreamingTtsLastSentCountRef.current) return;
-    feedStreamingTtsLastSentCountRef.current = sentences.length;
-    const q = ttsQueueRef.current;
-    if (q?.argId !== argId) {
-      streamingTtsArgIdRef.current = argId;
-      ttsQueueRef.current = { argId, sentences, nextToPlay: 0 };
-      setSpeakingArgId(argId);
-      if (!ttsAudioRef.current) playNextInQueue();
-    } else {
-      ttsQueueRef.current = { ...q, sentences };
-      if (!ttsAudioRef.current) playNextInQueue();
-    }
-  };
-
   const speakText = async (argId: string, text: string) => {
     if (!ttsEnabled) return;
     if (!text?.trim()) return;
@@ -984,8 +961,6 @@ const App: React.FC = () => {
     setSpeakingArgId(null);
     setTtsHighlightIndex(-1);
     ttsQueueRef.current = null;
-    streamingTtsArgIdRef.current = null;
-    feedStreamingTtsLastSentCountRef.current = 0;
     try {
       const streamResponse = await generateDebateResponseStream(
         session.topic,
@@ -1017,7 +992,6 @@ const App: React.FC = () => {
         const textChunk = chunk?.text ?? '';
         if (!textChunk) continue;
         fullText += textChunk;
-        if (ttsEnabled) feedStreamingTts(aiArgId, fullText);
 
         setSession((prev) => {
           const existingIdx = prev.history.findIndex((x) => x.id === aiArgId);
@@ -1036,7 +1010,7 @@ const App: React.FC = () => {
       if (ttsEnabled) {
         const { speech } = parseThinkingSpeech(fullText);
         const toRead = (speech || fullText || '').trim();
-        if (toRead && streamingTtsArgIdRef.current !== aiArgId) speakText(aiArgId, toRead);
+        if (toRead) speakText(aiArgId, toRead);
       }
     } catch (error) {
       console.error('AI Generation Error', error);
@@ -1086,8 +1060,6 @@ const App: React.FC = () => {
     setSpeakingArgId(null);
     setTtsHighlightIndex(-1);
     ttsQueueRef.current = null;
-    streamingTtsArgIdRef.current = null;
-    feedStreamingTtsLastSentCountRef.current = 0;
     const step = DEBATE_SEQUENCE[turnIndex];
     
     try {
@@ -1113,7 +1085,6 @@ const App: React.FC = () => {
         const text = chunk.text;
         if (text) {
           fullText += text;
-          if (ttsEnabled) feedStreamingTts(aiArgId, fullText);
 
           if (isFirstChunk) {
             setIsAiThinking(false); // Stop thinking animation, show bubble
@@ -1153,7 +1124,7 @@ const App: React.FC = () => {
       if (ttsEnabled) {
         const { speech } = parseThinkingSpeech(fullText);
         const toRead = (speech || fullText || '').trim();
-        if (toRead && streamingTtsArgIdRef.current !== aiArgId) speakText(aiArgId, toRead);
+        if (toRead) speakText(aiArgId, toRead);
       }
 
     } catch (error) {
