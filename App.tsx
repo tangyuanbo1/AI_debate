@@ -472,6 +472,9 @@ const App: React.FC = () => {
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
   const ttsQueueRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
+  const ttsCancelledRef = useRef<boolean>(false);
+  const ttsPausedRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
+  const ttsBrowserPlayRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem('ttsEnabled', String(ttsEnabled));
@@ -761,7 +764,8 @@ const App: React.FC = () => {
     return /[\u4e00-\u9fff]/.test(text || '') ? 'zh-CN' : 'en-US';
   };
 
-  const stopTtsPlayback = () => {
+  const stopTtsPlayback = (savePaused = false) => {
+    ttsCancelledRef.current = true;
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
       ttsAudioRef.current.src = '';
@@ -773,6 +777,15 @@ const App: React.FC = () => {
     }
     const synth = window.speechSynthesis;
     if (synth) synth.cancel();
+    if (savePaused) {
+      const fromQueue = ttsQueueRef.current;
+      const fromBrowser = ttsBrowserPlayRef.current;
+      ttsPausedRef.current = fromQueue ? { ...fromQueue } : fromBrowser ? { ...fromBrowser } : null;
+    } else {
+      ttsPausedRef.current = null;
+    }
+    ttsQueueRef.current = null;
+    ttsBrowserPlayRef.current = null;
   };
 
   const splitSentences = (text: string): string[] => {
@@ -780,11 +793,13 @@ const App: React.FC = () => {
   };
 
   const playNextInQueue = async () => {
+    if (ttsCancelledRef.current) return;
     const q = ttsQueueRef.current;
     if (!q || q.nextToPlay >= q.sentences.length) {
       setSpeakingArgId(null);
       setTtsHighlightIndex(-1);
       ttsQueueRef.current = null;
+      ttsPausedRef.current = null;
       return;
     }
     const sentence = q.sentences[q.nextToPlay];
@@ -794,17 +809,22 @@ const App: React.FC = () => {
       ttsQueueRef.current = null;
       if (remaining.length > 0 && window.speechSynthesis) {
         setSpeakingArgId(q.argId);
+        ttsBrowserPlayRef.current = { argId: q.argId, sentences: q.sentences, nextToPlay: q.nextToPlay };
         const playNextBrowser = (idx: number) => {
+          if (ttsCancelledRef.current) return;
           if (idx >= remaining.length) {
             setSpeakingArgId(null);
             setTtsHighlightIndex(-1);
+            ttsPausedRef.current = null;
+            ttsBrowserPlayRef.current = null;
             return;
           }
+          ttsBrowserPlayRef.current = { argId: q.argId, sentences: q.sentences, nextToPlay: q.nextToPlay + idx };
           setTtsHighlightIndex(q.nextToPlay + idx);
           const u = new SpeechSynthesisUtterance(remaining[idx]);
           u.lang = detectSpeakLang(remaining[idx]);
-          u.onend = () => playNextBrowser(idx + 1);
-          u.onerror = () => playNextBrowser(idx + 1);
+          u.onend = () => { if (!ttsCancelledRef.current) playNextBrowser(idx + 1); };
+          u.onerror = () => { if (!ttsCancelledRef.current) playNextBrowser(idx + 1); };
           window.speechSynthesis.speak(u);
         };
         playNextBrowser(0);
@@ -819,6 +839,7 @@ const App: React.FC = () => {
     ttsAudioRef.current = audio;
     ttsUrlRef.current = url;
     audio.onended = () => {
+      if (ttsCancelledRef.current) return;
       if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
       ttsUrlRef.current = null;
       ttsAudioRef.current = null;
@@ -826,6 +847,7 @@ const App: React.FC = () => {
       playNextInQueue();
     };
     audio.onerror = () => {
+      if (ttsCancelledRef.current) return;
       if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
       ttsUrlRef.current = null;
       ttsAudioRef.current = null;
@@ -833,6 +855,7 @@ const App: React.FC = () => {
       playNextInQueue();
     };
     audio.play().catch(() => {
+      if (ttsCancelledRef.current) return;
       if (ttsQueueRef.current) ttsQueueRef.current.nextToPlay += 1;
       playNextInQueue();
     });
@@ -842,22 +865,23 @@ const App: React.FC = () => {
     if (!ttsEnabled) return;
     if (!text?.trim()) return;
     if (speakingArgId === argId) {
-      stopTtsPlayback();
+      stopTtsPlayback(true);
       setSpeakingArgId(null);
       setTtsHighlightIndex(-1);
-      ttsQueueRef.current = null;
       return;
     }
-    stopTtsPlayback();
-    ttsQueueRef.current = null;
+    const paused = ttsPausedRef.current?.argId === argId ? ttsPausedRef.current : null;
+    stopTtsPlayback(false);
+    ttsCancelledRef.current = false;
     setSpeakingArgId(argId);
     setTtsHighlightIndex(-1);
 
-    const sentences = splitSentences(text);
+    const sentences = paused ? paused.sentences : splitSentences(text);
+    const startFrom = paused ? paused.nextToPlay : 0;
     const onEnd = () => setSpeakingArgId((prev) => (prev === argId ? null : prev));
 
     if (sentences.length > 0) {
-      ttsQueueRef.current = { argId, sentences, nextToPlay: 0 };
+      ttsQueueRef.current = { argId, sentences, nextToPlay: startFrom };
       playNextInQueue();
       return;
     }
