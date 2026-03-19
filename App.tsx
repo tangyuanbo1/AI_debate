@@ -7,6 +7,13 @@ import { DebateSession, Argument, DebateSide } from './types';
 import { generateDebateResponseStream, generateJudgeVerdict, transcribeAudio } from './services/qwenService';
 import DebaterCard from './components/DebaterCard';
 
+declare global {
+  interface Window {
+    webkitSpeechRecognition?: any;
+    SpeechRecognition?: any;
+  }
+}
+
 const App: React.FC = () => {
   type Language = 'zh-CN' | 'en-US';
   const [lang, setLang] = useState<Language>(() => {
@@ -369,6 +376,21 @@ const App: React.FC = () => {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const speechRecRef = useRef<any>(null);
+  const sttBaseTextRef = useRef<string>('');
+  const [sttSupported] = useState<boolean>(() => Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
+
+  // TTS (read aloud)
+  const [ttsEnabled, setTtsEnabled] = useState<boolean>(() => window.localStorage.getItem('ttsEnabled') !== 'false');
+  const [ttsAutoAi, setTtsAutoAi] = useState<boolean>(() => window.localStorage.getItem('ttsAutoAi') === 'true');
+  const [speakingArgId, setSpeakingArgId] = useState<string | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem('ttsEnabled', String(ttsEnabled));
+  }, [ttsEnabled]);
+  useEffect(() => {
+    window.localStorage.setItem('ttsAutoAi', String(ttsAutoAi));
+  }, [ttsAutoAi]);
 
   // Judge State
   const [judgeVerdict, setJudgeVerdict] = useState<string | null>(null);
@@ -515,7 +537,7 @@ const App: React.FC = () => {
     }
   };
 
-  // --- New Voice Input Logic (Gemini API) ---
+  // --- Voice Input (Streaming STT via Web Speech API; fallback to MediaRecorder->transcribe) ---
   const toggleRecording = async () => {
     if (isRecording) {
       stopRecording();
@@ -525,6 +547,53 @@ const App: React.FC = () => {
   };
 
   const startRecording = async () => {
+    // Prefer Web Speech STT for real-time transcription (Edge/Chrome)
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognitionCtor) {
+      try {
+        const rec = new SpeechRecognitionCtor();
+        speechRecRef.current = rec;
+        sttBaseTextRef.current = inputText ? `${inputText.trim()} ` : '';
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = lang === 'zh-CN' ? 'zh-CN' : 'en-US';
+
+        rec.onresult = (event: any) => {
+          let finalText = '';
+          let interimText = '';
+          for (let i = event.resultIndex; i < event.results.length; i += 1) {
+            const res = event.results[i];
+            const transcript = String(res?.[0]?.transcript ?? '');
+            if (res.isFinal) finalText += transcript;
+            else interimText += transcript;
+          }
+          const merged = `${sttBaseTextRef.current}${(finalText + interimText).trim()}`.trim();
+          setInputText(merged);
+        };
+
+        rec.onerror = (e: any) => {
+          console.error('SpeechRecognition error', e);
+          setIsRecording(false);
+          setIsTranscribing(false);
+          alert(t('micNoAccess'));
+        };
+
+        rec.onend = () => {
+          // Some browsers auto-stop; keep UI consistent
+          setIsRecording(false);
+          setIsTranscribing(false);
+        };
+
+        rec.start();
+        setIsRecording(true);
+        setIsTranscribing(true);
+        return;
+      } catch (e) {
+        console.error('SpeechRecognition start failed', e);
+        // fall through to MediaRecorder
+      }
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
@@ -556,6 +625,18 @@ const App: React.FC = () => {
   };
 
   const stopRecording = () => {
+    const rec = speechRecRef.current;
+    if (rec && isRecording) {
+      try {
+        rec.stop();
+      } catch {
+        // ignore
+      }
+      speechRecRef.current = null;
+      setIsRecording(false);
+      setIsTranscribing(false);
+      return;
+    }
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
@@ -585,6 +666,34 @@ const App: React.FC = () => {
     }
   };
   // -------------------------
+
+  const detectSpeakLang = (text: string): string => {
+    return /[\u4e00-\u9fff]/.test(text || '') ? 'zh-CN' : 'en-US';
+  };
+
+  const speakText = (argId: string, text: string) => {
+    if (!ttsEnabled) return;
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    if (!text?.trim()) return;
+    // If clicking the same item, toggle stop
+    if (speakingArgId === argId) {
+      synth.cancel();
+      setSpeakingArgId(null);
+      return;
+    }
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = detectSpeakLang(text);
+    u.onend = () => {
+      setSpeakingArgId((prev) => (prev === argId ? null : prev));
+    };
+    u.onerror = () => {
+      setSpeakingArgId((prev) => (prev === argId ? null : prev));
+    };
+    setSpeakingArgId(argId);
+    synth.speak(u);
+  };
 
   const currentStep = session.mode === 'structured' ? DEBATE_SEQUENCE[session.currentTurn] : null;
   const isStudentTurn = Boolean(currentStep && !currentStep.debater.isAI);
@@ -808,6 +917,13 @@ const App: React.FC = () => {
         ...prev,
         currentTurn: prev.currentTurn + 1,
       }));
+
+      // Optional: auto read AI speech when done
+      if (ttsEnabled && ttsAutoAi) {
+        const { speech } = parseThinkingSpeech(fullText);
+        const toRead = (speech || fullText || '').trim();
+        if (toRead) speakText(aiArgId, toRead);
+      }
 
     } catch (error) {
       console.error("AI Generation Error", error);
@@ -1368,6 +1484,29 @@ const App: React.FC = () => {
                     <span>{arg.speakerName}</span>
                     <span className="opacity-30">•</span>
                     <span>{new Date(arg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    {ttsEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const speakable =
+                            arg.side === DebateSide.CON
+                              ? (() => {
+                                  const { speech } = parseThinkingSpeech(arg.text);
+                                  return speech || '';
+                                })()
+                              : arg.text;
+                          speakText(arg.id, speakable);
+                        }}
+                        className={`ml-2 px-2 py-1 rounded border text-[10px] font-black transition-colors ${
+                          speakingArgId === arg.id
+                            ? 'bg-yellow-600/20 border-yellow-500/40 text-yellow-300'
+                            : 'bg-slate-950/30 border-slate-700 text-slate-300 hover:bg-slate-950/50'
+                        }`}
+                        title={speakingArgId === arg.id ? 'Stop reading' : 'Read aloud'}
+                      >
+                        {speakingArgId === arg.id ? 'Stop' : 'Read'}
+                      </button>
+                    )}
                   </div>
                   {arg.side === DebateSide.CON ? (
                     (() => {
@@ -1510,6 +1649,22 @@ const App: React.FC = () => {
                 </span>
               </div>
 
+                  <div className="flex items-center justify-end gap-4">
+                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                      <input type="checkbox" checked={ttsEnabled} onChange={(e) => setTtsEnabled(e.target.checked)} />
+                      TTS
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={ttsAutoAi}
+                        onChange={(e) => setTtsAutoAi(e.target.checked)}
+                        disabled={!ttsEnabled}
+                      />
+                      Auto-read AI
+                    </label>
+              </div>
+
               {isStudentTurn ? (
                 <div className="flex flex-col sm:flex-row gap-4">
                   <div className="flex-1 relative">
@@ -1521,29 +1676,22 @@ const App: React.FC = () => {
                       disabled={isRecording || isTranscribing}
                     />
                     
-                    {/* Microphone / Voice Input Trigger */}
-                    <div className="hidden absolute bottom-4 left-4 z-10 items-center gap-2">
+                    {/* Microphone / Voice Input Trigger (streaming STT if supported) */}
+                    {sttSupported && (
+                    <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2">
                       <button
                         type="button"
                         onClick={toggleRecording}
-                        disabled={isTranscribing}
                         className={`p-2 rounded-full transition-all duration-300 flex items-center justify-center ${
                           isRecording 
                             ? 'bg-red-500 text-white ring-4 ring-red-500/30 animate-pulse' 
-                            : isTranscribing
-                                ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
                                 : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white'
                         }`}
-                        title={isRecording ? t('stopRecording') : t('clickToRecord')}
+                          title={isRecording ? t('stopRecording') : t('clickToRecord')}
                       >
                          {isRecording ? (
                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                              <rect x="6" y="6" width="12" height="12" rx="1" />
-                           </svg>
-                         ) : isTranscribing ? (
-                            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
                          ) : (
                             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1558,6 +1706,7 @@ const App: React.FC = () => {
                          </span>
                       )}
                     </div>
+                    )}
 
                     <div className="absolute bottom-4 right-4 text-xs text-slate-500">
                       {t('markdownSupported')}

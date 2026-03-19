@@ -7,6 +7,7 @@ export default defineConfig(() => {
     server: {
       port: 3000,
       host: '0.0.0.0',
+      allowedHosts: ['debate.phosphorusforum.com'],
       proxy: {
         // 前端只打 /api，由本地 Node 后端转发到阿里云 DashScope（避免暴露 Key / 解决 CORS）
         '/api': {
