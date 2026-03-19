@@ -38,5 +38,9 @@ npm run dev
 
 启动后：
 
-- 前端：`http://localhost:3000`
+- 前端：`http://localhost:3001`
 - 后端：`http://localhost:8787`（仅供前端通过 `/api/*` 访问）
+
+## 生产/测试环境部署
+
+情感语音 TTS 需配置 Nginx 反向代理与后端密钥，详见 [deploy/README.md](deploy/README.md)。
