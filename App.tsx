@@ -1740,29 +1740,6 @@ const App: React.FC = () => {
                     <span>{getDebaterName(arg.speakerId)}</span>
                     <span className="opacity-30">•</span>
                     <span>{new Date(arg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    {ttsEnabled && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const speakable =
-                            arg.side === DebateSide.CON
-                              ? (() => {
-                                  const { speech } = parseThinkingSpeech(arg.text);
-                                  return speech || '';
-                                })()
-                              : arg.text;
-                          speakText(arg.id, speakable);
-                        }}
-                        className={`ml-2 px-2 py-1 rounded border text-[10px] font-black transition-colors ${
-                          speakingArgId === arg.id
-                            ? 'bg-yellow-600/20 border-yellow-500/40 text-yellow-300'
-                            : 'bg-slate-950/30 border-slate-700 text-slate-300 hover:bg-slate-950/50'
-                        }`}
-                        title={speakingArgId === arg.id ? t('stopReading') : t('readAloud')}
-                      >
-                        {speakingArgId === arg.id ? t('stopReading') : t('readAloud')}
-                      </button>
-                    )}
                   </div>
                   {arg.side === DebateSide.CON ? (
                     (() => {
