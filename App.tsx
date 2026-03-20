@@ -475,6 +475,9 @@ const App: React.FC = () => {
   /** 句索引 → 该句 TTS 的 Promise（speakText 时并发预取整段，播放时直接 await） */
   const ttsPrefetchRef = useRef<Map<number, Promise<string | null>>>(new Map());
   const ttsCancelledRef = useRef<boolean>(false);
+  /** 服务端已要求略快语速；播放时再微调，过大易变调 */
+  const apiTtsPlaybackRate = 1.12;
+  const browserTtsUtteranceRate = 1.08;
   const ttsPausedRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
   const ttsBrowserPlayRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
 
@@ -762,10 +765,6 @@ const App: React.FC = () => {
   };
   // -------------------------
 
-  const detectSpeakLang = (text: string): 'zh-CN' | 'en-US' => {
-    return /[\u4e00-\u9fff]/.test(text || '') ? 'zh-CN' : 'en-US';
-  };
-
   const stopTtsPlayback = (savePaused = false) => {
     ttsCancelledRef.current = true;
     ttsPrefetchRef.current.clear();
@@ -802,7 +801,7 @@ const App: React.FC = () => {
       const s = sentences[i];
       ttsPrefetchRef.current.set(
         i,
-        synthesizeSpeech(s, detectSpeakLang(s)).catch(() => null),
+        synthesizeSpeech(s, lang).catch(() => null),
       );
     }
   };
@@ -826,7 +825,7 @@ const App: React.FC = () => {
         url = await ttsPrefetchRef.current.get(idx)!;
         ttsPrefetchRef.current.delete(idx);
       } else {
-        url = await synthesizeSpeech(sentence, detectSpeakLang(sentence));
+        url = await synthesizeSpeech(sentence, lang);
       }
     } catch {
       url = null;
@@ -850,7 +849,8 @@ const App: React.FC = () => {
           ttsBrowserPlayRef.current = { argId: q.argId, sentences: q.sentences, nextToPlay: q.nextToPlay + idx };
           setTtsHighlightIndex(q.nextToPlay + idx);
           const u = new SpeechSynthesisUtterance(remaining[idx]);
-          u.lang = detectSpeakLang(remaining[idx]);
+          u.lang = lang;
+          u.rate = browserTtsUtteranceRate;
           u.onend = () => { if (!ttsCancelledRef.current) playNextBrowser(idx + 1); };
           u.onerror = () => { if (!ttsCancelledRef.current) playNextBrowser(idx + 1); };
           window.speechSynthesis.speak(u);
@@ -864,6 +864,7 @@ const App: React.FC = () => {
     }
     setTtsHighlightIndex(q.nextToPlay);
     const audio = new Audio(url);
+    audio.playbackRate = apiTtsPlaybackRate;
     ttsAudioRef.current = audio;
     ttsUrlRef.current = url;
     audio.onended = () => {
@@ -918,12 +919,13 @@ const App: React.FC = () => {
 
     let url: string | null = null;
     try {
-      url = await synthesizeSpeech(text, detectSpeakLang(text));
+      url = await synthesizeSpeech(text, lang);
     } catch {
       url = null;
     }
     if (url) {
       const audio = new Audio(url);
+      audio.playbackRate = apiTtsPlaybackRate;
       ttsAudioRef.current = audio;
       ttsUrlRef.current = url;
       audio.onended = () => {
@@ -945,7 +947,8 @@ const App: React.FC = () => {
     const synth = window.speechSynthesis;
     if (synth) {
       const u = new SpeechSynthesisUtterance(text);
-      u.lang = detectSpeakLang(text);
+      u.lang = lang;
+      u.rate = browserTtsUtteranceRate;
       u.onend = onEnd;
       u.onerror = onEnd;
       synth.speak(u);

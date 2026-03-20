@@ -1028,11 +1028,13 @@ app.post('/api/tts', async (req, res) => {
       res.status(400).json({ error: 'Missing text' });
       return;
     }
-    const isChinese = (lang === 'zh-CN' || /[\u4e00-\u9fff]/.test(text));
+    // 与前端辩论语言一致，避免按句检测导致中英文句间切换、听感像换人
+    const isChinese =
+      lang === 'zh-CN' ? true : lang === 'en-US' ? false : /[\u4e00-\u9fff]/.test(text);
     const languageType = isChinese ? 'Chinese' : 'English';
     const instructions = isChinese
-      ? '语速适中，语气坚定有力、富有说服力，适合辩论发言场景，带有适度的情感起伏。'
-      : 'Moderate pace, firm and persuasive tone, suitable for debate speech, with moderate emotional variation.';
+      ? '全程使用同一说话人、音色与语气保持一致。语速比正常略快一点，吐字清晰；语气坚定、适合辩论，情绪起伏不要过大。'
+      : 'Use one consistent speaker and voice throughout. Slightly faster than normal pace, clear articulation; firm persuasive debate tone, avoid large emotional swings.';
 
     const ttsBody = {
       model: 'qwen3-tts-instruct-flash',
@@ -1041,7 +1043,8 @@ app.post('/api/tts', async (req, res) => {
         voice: 'Cherry',
         language_type: languageType,
         instructions,
-        optimize_instructions: true,
+        // 关闭后由固定指令主导，减少每句被「优化」成不同风格
+        optimize_instructions: false,
       },
     };
 
