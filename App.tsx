@@ -472,6 +472,8 @@ const App: React.FC = () => {
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
   const ttsQueueRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
+  /** 句索引 → 该句 TTS 的 Promise（speakText 时并发预取整段，播放时直接 await） */
+  const ttsPrefetchRef = useRef<Map<number, Promise<string | null>>>(new Map());
   const ttsCancelledRef = useRef<boolean>(false);
   const ttsPausedRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
   const ttsBrowserPlayRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
@@ -766,6 +768,7 @@ const App: React.FC = () => {
 
   const stopTtsPlayback = (savePaused = false) => {
     ttsCancelledRef.current = true;
+    ttsPrefetchRef.current.clear();
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
       ttsAudioRef.current.src = '';
@@ -792,6 +795,18 @@ const App: React.FC = () => {
     return text.split(/(?<=[。！？.!?])\s*/).filter((s) => s.trim() && /[。！？.!?]\s*$/.test(s.trim()));
   };
 
+  /** 并发预缓存整段各句的语音，避免播完一句再等下一句的网络 */
+  const prefetchTtsQueue = (sentences: string[], fromIndex: number) => {
+    for (let i = fromIndex; i < sentences.length; i++) {
+      if (ttsPrefetchRef.current.has(i)) continue;
+      const s = sentences[i];
+      ttsPrefetchRef.current.set(
+        i,
+        synthesizeSpeech(s, detectSpeakLang(s)).catch(() => null),
+      );
+    }
+  };
+
   const playNextInQueue = async () => {
     if (ttsCancelledRef.current) return;
     const q = ttsQueueRef.current;
@@ -800,18 +815,26 @@ const App: React.FC = () => {
       setTtsHighlightIndex(-1);
       ttsQueueRef.current = null;
       ttsPausedRef.current = null;
+      ttsPrefetchRef.current.clear();
       return;
     }
-    const sentence = q.sentences[q.nextToPlay];
+    const idx = q.nextToPlay;
+    const sentence = q.sentences[idx];
     let url: string | null = null;
     try {
-      url = await synthesizeSpeech(sentence, detectSpeakLang(sentence));
+      if (ttsPrefetchRef.current.has(idx)) {
+        url = await ttsPrefetchRef.current.get(idx)!;
+        ttsPrefetchRef.current.delete(idx);
+      } else {
+        url = await synthesizeSpeech(sentence, detectSpeakLang(sentence));
+      }
     } catch {
       url = null;
     }
     if (!url) {
       const remaining = q.sentences.slice(q.nextToPlay);
       ttsQueueRef.current = null;
+      ttsPrefetchRef.current.clear();
       if (remaining.length > 0 && window.speechSynthesis) {
         setSpeakingArgId(q.argId);
         ttsBrowserPlayRef.current = { argId: q.argId, sentences: q.sentences, nextToPlay: q.nextToPlay };
@@ -878,6 +901,7 @@ const App: React.FC = () => {
     const paused = ttsPausedRef.current?.argId === argId ? ttsPausedRef.current : null;
     stopTtsPlayback(false);
     ttsCancelledRef.current = false;
+    ttsPrefetchRef.current.clear();
     setSpeakingArgId(argId);
     setTtsHighlightIndex(-1);
 
@@ -887,6 +911,7 @@ const App: React.FC = () => {
 
     if (sentences.length > 0) {
       ttsQueueRef.current = { argId, sentences, nextToPlay: startFrom };
+      prefetchTtsQueue(sentences, startFrom);
       playNextInQueue();
       return;
     }
@@ -1025,6 +1050,9 @@ const App: React.FC = () => {
 
       const aiArgId = Math.random().toString(36).substr(2, 9);
       let fullText = '';
+      let isFirstChunk = true;
+      let lastFlush = 0;
+      const streamUiThrottleMs = 28;
 
       for await (const chunk of streamResponse as any) {
         if (chunk?.debug) {
@@ -1037,8 +1065,9 @@ const App: React.FC = () => {
         if (!textChunk) continue;
         fullText += textChunk;
 
-        setSession((prev) => {
-          const existingIdx = prev.history.findIndex((x) => x.id === aiArgId);
+        const now = Date.now();
+        if (isFirstChunk) {
+          setIsAiThinking(false);
           const aiArg: Argument = {
             id: aiArgId,
             speakerId: responder.id,
@@ -1047,9 +1076,22 @@ const App: React.FC = () => {
             text: fullText,
             timestamp: Date.now(),
           };
-          const next = existingIdx >= 0 ? prev.history.map((x) => (x.id === aiArgId ? aiArg : x)) : [...prev.history, aiArg];
-          return { ...prev, history: next };
-        });
+          setSession((prev) => ({ ...prev, history: [...prev.history, aiArg] }));
+          isFirstChunk = false;
+          lastFlush = now;
+        } else if (now - lastFlush >= streamUiThrottleMs) {
+          lastFlush = now;
+          setSession((prev) => ({
+            ...prev,
+            history: prev.history.map((x) => (x.id === aiArgId ? { ...x, text: fullText, timestamp: Date.now() } : x)),
+          }));
+        }
+      }
+      if (!isFirstChunk) {
+        setSession((prev) => ({
+          ...prev,
+          history: prev.history.map((x) => (x.id === aiArgId ? { ...x, text: fullText, timestamp: Date.now() } : x)),
+        }));
       }
       if (ttsEnabled) {
         const { speech } = parseThinkingSpeech(fullText);
@@ -1119,6 +1161,8 @@ const App: React.FC = () => {
       const aiArgId = Math.random().toString(36).substr(2, 9);
       let fullText = "";
       let isFirstChunk = true;
+      let lastFlush = 0;
+      const streamUiThrottleMs = 28;
 
       for await (const chunk of streamResponse as any) {
         if (chunk?.debug) {
@@ -1126,9 +1170,10 @@ const App: React.FC = () => {
           console.log(chunk.debug);
           console.groupEnd();
         }
-        const text = chunk.text;
+        const text = chunk?.text;
         if (text) {
           fullText += text;
+          const now = Date.now();
 
           if (isFirstChunk) {
             setIsAiThinking(false); // Stop thinking animation, show bubble
@@ -1147,16 +1192,27 @@ const App: React.FC = () => {
               history: [...prev.history, aiArg]
             }));
             isFirstChunk = false;
-          } else {
+            lastFlush = now;
+          } else if (now - lastFlush >= streamUiThrottleMs) {
+            lastFlush = now;
             // Update the existing argument with new text
             setSession(prev => ({
               ...prev,
               history: prev.history.map(arg => 
-                arg.id === aiArgId ? { ...arg, text: fullText } : arg
+                arg.id === aiArgId ? { ...arg, text: fullText, timestamp: Date.now() } : arg
               )
             }));
           }
         }
+      }
+
+      if (!isFirstChunk) {
+        setSession(prev => ({
+          ...prev,
+          history: prev.history.map(arg => 
+            arg.id === aiArgId ? { ...arg, text: fullText, timestamp: Date.now() } : arg
+          )
+        }));
       }
 
       // Advance turn after stream completes

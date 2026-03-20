@@ -804,6 +804,9 @@ Write ONE coherent paragraph describing your reasoning route (readable; do NOT r
 
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
+    // DashScope incremental_output 有时返回「纯增量」，有时返回「截至当前的完整文本」。
+    // 统一转成增量再转发，避免前端 fullText += 时出现重复拼接。
+    let prevEmitted = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -823,7 +826,15 @@ Write ONE coherent paragraph describing your reasoning route (readable; do NOT r
           try {
             const payload = JSON.parse(raw);
             const text = extractTextFromDashScopePayload(payload);
-            if (text) sseSend(res, { text });
+            if (!text) continue;
+            let delta = text;
+            if (prevEmitted && text.startsWith(prevEmitted)) {
+              delta = text.slice(prevEmitted.length);
+              prevEmitted = text;
+            } else {
+              prevEmitted += text;
+            }
+            if (delta) sseSend(res, { text: delta });
           } catch {
             // 忽略坏包
           }
