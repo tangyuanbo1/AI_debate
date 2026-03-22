@@ -14,6 +14,9 @@ declare global {
   }
 }
 
+/** 用户已确认过语音说明弹窗后写入，避免每次点麦克风都弹窗 */
+const MIC_CONSENT_STORAGE_KEY = 'ai_debate_mic_consent_v1';
+
 const App: React.FC = () => {
   type Language = 'zh-CN' | 'en-US';
   const [lang, setLang] = useState<Language>(() => {
@@ -649,9 +652,19 @@ const App: React.FC = () => {
   };
 
   // --- Voice Input (Streaming STT via Web Speech API; fallback to MediaRecorder->transcribe) ---
+  const hasMicConsentFlag = () => {
+    try {
+      return window.localStorage.getItem(MIC_CONSENT_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  };
+
   const toggleRecording = async () => {
     if (isRecording) {
       stopRecording();
+    } else if (hasMicConsentFlag()) {
+      void startRecording();
     } else {
       setMicConsentOpen(true);
     }
@@ -662,24 +675,40 @@ const App: React.FC = () => {
   };
 
   const handleMicConsentContinue = () => {
+    try {
+      window.localStorage.setItem(MIC_CONSENT_STORAGE_KEY, '1');
+    } catch {
+      // 隐私模式等忽略
+    }
     setMicConsentOpen(false);
     void startRecording();
   };
 
-  const startRecording = async () => {
-    // 先请求麦克风权限：Chrome/Edge 下 Web Speech API 有时在未授权时直接报 not-allowed，先 getUserMedia 可弹出明确授权框
+  /** 结束可能残留的 Web Speech 实例，避免与新实例冲突触发 aborted */
+  const disposeSpeechRecognition = () => {
+    const prev = speechRecRef.current;
+    if (!prev) return;
     try {
-      const pre = await navigator.mediaDevices.getUserMedia({ audio: true });
-      pre.getTracks().forEach((track) => track.stop());
+      prev.onresult = null;
+      prev.onerror = null;
+      prev.onend = null;
+      prev.onstart = null;
+      if (typeof prev.abort === 'function') prev.abort();
+      else if (typeof prev.stop === 'function') prev.stop();
     } catch {
-      alert(`${t('micNoAccess')}\n\n${t('micDeniedHint')}`);
-      return;
+      // ignore
     }
+    speechRecRef.current = null;
+  };
 
+  const startRecording = async () => {
+    // 不在 SpeechRecognition 前再调 getUserMedia：先停轨道再识别易与 Web Speech 抢设备，触发 error: aborted
     // Prefer Web Speech STT for real-time transcription (Edge/Chrome)
     const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognitionCtor) {
       try {
+        disposeSpeechRecognition();
+
         const rec = new SpeechRecognitionCtor();
         speechRecRef.current = rec;
         sttBaseTextRef.current = inputText ? `${inputText.trim()} ` : '';
@@ -705,11 +734,11 @@ const App: React.FC = () => {
 
         rec.onerror = (e: any) => {
           const code = String(e?.error ?? '');
-          console.error('SpeechRecognition error', e);
-          // no-speech：静音/未检测到语音，非权限问题，不弹窗
+          // no-speech / aborted：常见且非致命，不刷红字、不弹窗
           if (code === 'no-speech' || code === 'aborted') {
             return;
           }
+          console.warn('SpeechRecognition error', code, e);
           if (code === 'not-allowed' || code === 'service-not-allowed' || code === 'audio-capture') {
             alert(`${t('micNoAccess')}\n\n${t('micDeniedHint')}`);
           }
@@ -723,12 +752,23 @@ const App: React.FC = () => {
           setIsTranscribing(false);
         };
 
-        rec.start();
-        setIsRecording(true);
-        setIsTranscribing(true);
+        // 微任务延后 start，避免与刚关闭弹窗的渲染/焦点抢同一轮，减少 aborted
+        queueMicrotask(() => {
+          if (speechRecRef.current !== rec) return;
+          try {
+            rec.start();
+            setIsRecording(true);
+            setIsTranscribing(true);
+          } catch (err) {
+            console.warn('SpeechRecognition.start() failed', err);
+            speechRecRef.current = null;
+            setIsRecording(false);
+            setIsTranscribing(false);
+          }
+        });
         return;
       } catch (e) {
-        console.error('SpeechRecognition start failed', e);
+        console.warn('SpeechRecognition init failed', e);
         // fall through to MediaRecorder
       }
     }
@@ -765,7 +805,7 @@ const App: React.FC = () => {
 
   const stopRecording = () => {
     const rec = speechRecRef.current;
-    if (rec && isRecording) {
+    if (rec) {
       try {
         rec.stop();
       } catch {
@@ -776,7 +816,7 @@ const App: React.FC = () => {
       setIsTranscribing(false);
       return;
     }
-    if (mediaRecorderRef.current && isRecording) {
+    if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
     }
