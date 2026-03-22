@@ -64,6 +64,13 @@ const App: React.FC = () => {
         aiSynthesizing: '{name} 正在组织反驳…',
         judgeUnavailable: '裁判暂不可用。',
         micNoAccess: '无法访问麦克风，请检查权限设置。',
+        micDeniedHint:
+          '若已拒绝过：点击地址栏左侧的锁或「网站信息」图标 → 将「麦克风」改为「允许」→ 刷新页面后再试。',
+        micConsentTitle: '使用语音输入',
+        micConsentBody:
+          '语音输入需要浏览器访问麦克风。点击下方按钮后，将出现系统授权提示，请选择「允许」。',
+        micConsentContinue: '继续并请求麦克风',
+        micConsentCancel: '取消',
         transcriptionFailed: '语音转写失败，请重试。',
         stopRecording: '停止录音',
         clickToRecord: '点击录音',
@@ -172,6 +179,13 @@ const App: React.FC = () => {
         aiSynthesizing: '{name} is synthesizing counter-arguments...',
         judgeUnavailable: 'Judge unavailable.',
         micNoAccess: 'Cannot access microphone. Please check permissions.',
+        micDeniedHint:
+          'If you previously blocked access: click the lock/site info icon in the address bar → set Microphone to Allow → refresh and try again.',
+        micConsentTitle: 'Voice input',
+        micConsentBody:
+          'Voice input needs microphone access. After you click the button below, your browser will ask for permission — please choose Allow.',
+        micConsentContinue: 'Continue and request microphone',
+        micConsentCancel: 'Cancel',
         transcriptionFailed: 'Transcription failed. Please try again.',
         stopRecording: 'Stop recording',
         clickToRecord: 'Click to record voice',
@@ -457,6 +471,8 @@ const App: React.FC = () => {
   
   // Voice Input State
   const [isRecording, setIsRecording] = useState(false);
+  /** 点击录音后先显示说明弹窗，再在「继续」里触发 getUserMedia，便于出现浏览器自带授权框 */
+  const [micConsentOpen, setMicConsentOpen] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -637,11 +653,29 @@ const App: React.FC = () => {
     if (isRecording) {
       stopRecording();
     } else {
-      await startRecording();
+      setMicConsentOpen(true);
     }
   };
 
+  const handleMicConsentCancel = () => {
+    setMicConsentOpen(false);
+  };
+
+  const handleMicConsentContinue = () => {
+    setMicConsentOpen(false);
+    void startRecording();
+  };
+
   const startRecording = async () => {
+    // 先请求麦克风权限：Chrome/Edge 下 Web Speech API 有时在未授权时直接报 not-allowed，先 getUserMedia 可弹出明确授权框
+    try {
+      const pre = await navigator.mediaDevices.getUserMedia({ audio: true });
+      pre.getTracks().forEach((track) => track.stop());
+    } catch {
+      alert(`${t('micNoAccess')}\n\n${t('micDeniedHint')}`);
+      return;
+    }
+
     // Prefer Web Speech STT for real-time transcription (Edge/Chrome)
     const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognitionCtor) {
@@ -670,10 +704,17 @@ const App: React.FC = () => {
         };
 
         rec.onerror = (e: any) => {
+          const code = String(e?.error ?? '');
           console.error('SpeechRecognition error', e);
+          // no-speech：静音/未检测到语音，非权限问题，不弹窗
+          if (code === 'no-speech' || code === 'aborted') {
+            return;
+          }
+          if (code === 'not-allowed' || code === 'service-not-allowed' || code === 'audio-capture') {
+            alert(`${t('micNoAccess')}\n\n${t('micDeniedHint')}`);
+          }
           setIsRecording(false);
           setIsTranscribing(false);
-          alert(t('micNoAccess'));
         };
 
         rec.onend = () => {
@@ -718,7 +759,7 @@ const App: React.FC = () => {
       setIsRecording(true);
     } catch (err) {
       console.error("Error accessing microphone:", err);
-      alert(t('micNoAccess'));
+      alert(`${t('micNoAccess')}\n\n${t('micDeniedHint')}`);
     }
   };
 
@@ -1698,6 +1739,41 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-lexend">
+      {micConsentOpen && (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="mic-consent-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleMicConsentCancel();
+          }}
+        >
+          <div className="bg-slate-900 border border-slate-600 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <h3 id="mic-consent-title" className="text-lg font-black text-white">
+              {t('micConsentTitle')}
+            </h3>
+            <p className="text-sm text-slate-300 leading-relaxed">{t('micConsentBody')}</p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-end pt-2">
+              <button
+                type="button"
+                onClick={handleMicConsentCancel}
+                className="px-4 py-2 rounded-xl border border-slate-600 text-slate-300 hover:bg-slate-800 font-bold text-sm"
+              >
+                {t('micConsentCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleMicConsentContinue}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-lg"
+              >
+                {t('micConsentContinue')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-slate-900 border-b border-slate-800 py-3 sm:py-4 px-4 sm:px-6 flex justify-between items-center sticky top-0 z-50">
         <div className="flex items-center gap-3 sm:gap-4 min-w-0">
