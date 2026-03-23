@@ -151,6 +151,7 @@ const App: React.FC = () => {
         readAloud: '朗读',
         stopReading: '停止朗读',
         thinkingExpand: '思考过程（点击展开）',
+        aiPreparingSpeech: '正在组织语言…',
       },
       'en-US': {
         appTitle: 'Classroom Debate',
@@ -270,6 +271,7 @@ const App: React.FC = () => {
         readAloud: 'Read aloud',
         stopReading: 'Stop reading',
         thinkingExpand: 'Thinking (click to expand)',
+        aiPreparingSpeech: 'Preparing…',
       },
     };
 
@@ -512,6 +514,14 @@ const App: React.FC = () => {
   const browserTtsUtteranceRate = 1.08;
   const ttsPausedRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number; speakerId?: string } | null>(null);
   const ttsBrowserPlayRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number; speakerId?: string } | null>(null);
+  /** 本轮 TTS 全部播完后执行（如结构化回合再 +1 轮到学生） */
+  const pendingTtsCompleteCallbackRef = useRef<(() => void) | null>(null);
+
+  const fireTtsPlaybackComplete = () => {
+    const fn = pendingTtsCompleteCallbackRef.current;
+    pendingTtsCompleteCallbackRef.current = null;
+    fn?.();
+  };
 
   useEffect(() => {
     window.localStorage.setItem('ttsEnabled', String(ttsEnabled));
@@ -632,6 +642,38 @@ const App: React.FC = () => {
 
     const isThinkingPhase = hasThinkingOpen && !hasSpeechOpen;
     return { thinking, speech, isThinkingPhase };
+  };
+
+  /** 气泡展示用：支持流式未闭合的 [[SPEECH]]；仅 THINKING 时用占位 */
+  const getConBubbleDisplay = (raw: string) => {
+    const sOpen = '[[SPEECH]]';
+    const sStart = raw.indexOf(sOpen);
+    if (sStart >= 0) {
+      const after = raw.slice(sStart + sOpen.length);
+      const sEnd = after.indexOf('[[/SPEECH]]');
+      const speech = (sEnd >= 0 ? after.slice(0, sEnd) : after).trim();
+      return { text: speech, placeholder: false as const };
+    }
+    if (!raw.includes('[[THINKING]]')) return { text: raw.trim(), placeholder: false as const };
+    return { text: '', placeholder: true as const };
+  };
+
+  /**
+   * 「思考中」应持续到正文流式真正开始：仅有 THINKING、或已出现 [[SPEECH]] 但正文仍为空时，仍为 true。
+   * 无 THINKING/SPEECH 标签的纯文本一旦非空，视为已开始输出。
+   */
+  const isAiStillPreparingContent = (raw: string) => {
+    if (!raw.trim()) return true;
+    const sOpen = '[[SPEECH]]';
+    const sStart = raw.indexOf(sOpen);
+    if (sStart >= 0) {
+      const after = raw.slice(sStart + sOpen.length);
+      const sEnd = after.indexOf('[[/SPEECH]]');
+      const speech = (sEnd >= 0 ? after.slice(0, sEnd) : after).trim();
+      return speech.length === 0;
+    }
+    if (raw.includes('[[THINKING]]')) return true;
+    return false;
   };
 
   useEffect(() => {
@@ -883,6 +925,7 @@ const App: React.FC = () => {
     }
     ttsQueueRef.current = null;
     ttsBrowserPlayRef.current = null;
+    pendingTtsCompleteCallbackRef.current = null;
   };
 
   const splitSentences = (text: string): string[] => {
@@ -905,11 +948,13 @@ const App: React.FC = () => {
     if (ttsCancelledRef.current) return;
     const q = ttsQueueRef.current;
     if (!q || q.nextToPlay >= q.sentences.length) {
+      const queueFinished = Boolean(q && q.nextToPlay >= q.sentences.length);
       setSpeakingArgId(null);
       setTtsHighlightIndex(-1);
       ttsQueueRef.current = null;
       ttsPausedRef.current = null;
       ttsPrefetchRef.current.clear();
+      if (queueFinished) fireTtsPlaybackComplete();
       return;
     }
     const idx = q.nextToPlay;
@@ -939,6 +984,7 @@ const App: React.FC = () => {
             setTtsHighlightIndex(-1);
             ttsPausedRef.current = null;
             ttsBrowserPlayRef.current = null;
+            fireTtsPlaybackComplete();
             return;
           }
           ttsBrowserPlayRef.current = { argId: q.argId, sentences: q.sentences, nextToPlay: q.nextToPlay + idx, speakerId: q.speakerId };
@@ -954,6 +1000,7 @@ const App: React.FC = () => {
       } else {
         setSpeakingArgId(null);
         setTtsHighlightIndex(-1);
+        fireTtsPlaybackComplete();
       }
       return;
     }
@@ -985,19 +1032,25 @@ const App: React.FC = () => {
     });
   };
 
-  const speakText = async (argId: string, text: string, opts?: { speakerId?: string }) => {
+  const speakText = async (
+    argId: string,
+    text: string,
+    opts?: { speakerId?: string; onPlaybackComplete?: () => void },
+  ) => {
     if (!ttsEnabled) return;
     if (!text?.trim()) return;
     if (speakingArgId === argId) {
       stopTtsPlayback(true);
       setSpeakingArgId(null);
       setTtsHighlightIndex(-1);
+      pendingTtsCompleteCallbackRef.current = null;
       return;
     }
     const paused = ttsPausedRef.current?.argId === argId ? ttsPausedRef.current : null;
     stopTtsPlayback(false);
     ttsCancelledRef.current = false;
     ttsPrefetchRef.current.clear();
+    pendingTtsCompleteCallbackRef.current = opts?.onPlaybackComplete ?? null;
     setSpeakingArgId(argId);
     setTtsHighlightIndex(-1);
 
@@ -1030,14 +1083,19 @@ const App: React.FC = () => {
         ttsUrlRef.current = null;
         ttsAudioRef.current = null;
         onEnd();
+        fireTtsPlaybackComplete();
       };
       audio.onerror = () => {
         if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
         ttsUrlRef.current = null;
         ttsAudioRef.current = null;
         onEnd();
+        fireTtsPlaybackComplete();
       };
-      audio.play().catch(() => onEnd());
+      audio.play().catch(() => {
+        onEnd();
+        fireTtsPlaybackComplete();
+      });
       return;
     }
 
@@ -1046,11 +1104,18 @@ const App: React.FC = () => {
       const u = new SpeechSynthesisUtterance(text);
       u.lang = lang;
       u.rate = browserTtsUtteranceRate;
-      u.onend = onEnd;
-      u.onerror = onEnd;
+      u.onend = () => {
+        onEnd();
+        fireTtsPlaybackComplete();
+      };
+      u.onerror = () => {
+        onEnd();
+        fireTtsPlaybackComplete();
+      };
       synth.speak(u);
     } else {
       onEnd();
+      fireTtsPlaybackComplete();
     }
   };
 
@@ -1059,25 +1124,24 @@ const App: React.FC = () => {
 
   const activeDebaterIdForHighlight = useMemo(() => {
     if (isAiThinking && thinkingAiSpeakerId) return thinkingAiSpeakerId;
+    // TTS 播放 AI 回复时，当前回合已可能 +1 到学生，优先保持 AI 头像高亮
+    if (speakingArgId && session.history.length) {
+      const sp = session.history.find((a) => a.id === speakingArgId);
+      if (sp?.side === DebateSide.CON) return sp.speakerId;
+    }
     if (session.mode === 'structured' && currentStep) return currentStep.debater.id;
     if (session.mode === 'freeDebate') {
       const last = session.history[session.history.length - 1];
       return last?.speakerId ?? null;
     }
     return null;
-  }, [session.mode, session.history, currentStep, isAiThinking, thinkingAiSpeakerId]);
+  }, [session.mode, session.history, currentStep, isAiThinking, thinkingAiSpeakerId, speakingArgId]);
 
   const liveSubtitle = useMemo(() => {
     const last = session.history[session.history.length - 1];
     if (!last) return null;
     const raw =
-      last.side === DebateSide.CON
-        ? (() => {
-            const { speech } = parseThinkingSpeech(last.text);
-            const s = speech.trim();
-            return s || (!last.text.includes('[[THINKING]]') ? last.text : '');
-          })()
-        : last.text;
+      last.side === DebateSide.CON ? getConBubbleDisplay(last.text).text : last.text;
     const text = (raw || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     if (!text) return null;
     return { speakerId: last.speakerId, text };
@@ -1191,11 +1255,12 @@ const App: React.FC = () => {
         const textChunk = chunk?.text ?? '';
         if (!textChunk) continue;
         fullText += textChunk;
+        const prep = isAiStillPreparingContent(fullText);
+        setIsAiThinking(prep);
+        setThinkingAiSpeakerId(prep ? responder.id : null);
 
         const now = Date.now();
         if (isFirstChunk) {
-          setIsAiThinking(false);
-          setThinkingAiSpeakerId(null);
           const aiArg: Argument = {
             id: aiArgId,
             speakerId: responder.id,
@@ -1315,12 +1380,13 @@ const App: React.FC = () => {
         const text = chunk?.text;
         if (text) {
           fullText += text;
+          const prep = isAiStillPreparingContent(fullText);
+          setIsAiThinking(prep);
+          setThinkingAiSpeakerId(prep ? step.debater.id : null);
           const now = Date.now();
 
           if (isFirstChunk) {
-            setIsAiThinking(false);
-            setThinkingAiSpeakerId(null);
-            // Initialize the AI argument in the history
+            // Initialize the AI argument in the history（思考中保持到 SPEECH 有字）
             const aiArg: Argument = {
               id: aiArgId,
               speakerId: step.debater.id,
@@ -1358,16 +1424,23 @@ const App: React.FC = () => {
         }));
       }
 
-      // Advance turn after stream completes
-      setSession(prev => ({
-        ...prev,
-        currentTurn: prev.currentTurn + 1,
-      }));
+      const advanceStructuredTurn = () => {
+        setSession((prev) => ({ ...prev, currentTurn: prev.currentTurn + 1 }));
+      };
 
       if (ttsEnabled) {
         const { speech } = parseThinkingSpeech(fullText);
         const toRead = (speech || fullText || '').trim();
-        if (toRead) speakText(aiArgId, toRead, { speakerId: step.debater.id });
+        if (toRead) {
+          speakText(aiArgId, toRead, {
+            speakerId: step.debater.id,
+            onPlaybackComplete: advanceStructuredTurn,
+          });
+        } else {
+          advanceStructuredTurn();
+        }
+      } else {
+        advanceStructuredTurn();
       }
 
     } catch (error) {
@@ -1964,6 +2037,7 @@ const App: React.FC = () => {
                       isActive={activeDebaterIdForHighlight === d.id}
                       isThinking={Boolean(thinkingAiSpeakerId === d.id && isAiThinking)}
                       thinkingLabel={t('thinkingStatus')}
+                      speakingEmphasis={activeDebaterIdForHighlight === d.id && d.isAI}
                       size="arena"
                       side="CON"
                       displayName={getDebaterName(d.id)}
@@ -2011,15 +2085,16 @@ const App: React.FC = () => {
                   </div>
                   {arg.side === DebateSide.CON ? (
                     (() => {
-                      const { speech } = parseThinkingSpeech(arg.text);
-                      const displaySpeech =
-                        speech.trim() !== ''
-                          ? speech
-                          : !arg.text.includes('[[THINKING]]')
-                            ? arg.text
-                            : '';
-                      if (!displaySpeech.trim()) {
+                      const { text: displaySpeech, placeholder } = getConBubbleDisplay(arg.text);
+                      if (!displaySpeech.trim() && !placeholder) {
                         return null;
+                      }
+                      if (placeholder && !displaySpeech.trim()) {
+                        return (
+                          <p className="leading-relaxed text-slate-500 italic text-sm animate-pulse">
+                            {t('aiPreparingSpeech')}
+                          </p>
+                        );
                       }
                       return (
                         <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">

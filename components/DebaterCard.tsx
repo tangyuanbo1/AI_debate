@@ -14,6 +14,8 @@ interface DebaterCardProps {
   /** AI 正在生成、尚未出正文时 */
   isThinking?: boolean;
   thinkingLabel?: string;
+  /** 当前轮到该辩手且需突出（如 AI 发言中） */
+  speakingEmphasis?: boolean;
 }
 
 const DebaterCard: React.FC<DebaterCardProps> = ({
@@ -26,6 +28,7 @@ const DebaterCard: React.FC<DebaterCardProps> = ({
   size = 'default',
   isThinking,
   thinkingLabel,
+  speakingEmphasis,
 }) => {
   const sideColor = side === 'PRO' ? 'border-blue-500' : 'border-red-500';
   const glowClass =
@@ -36,9 +39,13 @@ const DebaterCard: React.FC<DebaterCardProps> = ({
       : '';
 
   const isArena = size === 'arena';
+  const emphasisImg =
+    speakingEmphasis && side === 'CON'
+      ? 'scale-[1.12] sm:scale-[1.18] ring-2 ring-amber-400/70 shadow-xl shadow-amber-900/40 z-10'
+      : '';
   const imgClass = isArena
-    ? 'w-20 h-20 sm:w-28 sm:h-28 rounded-full border-2 border-slate-600 object-cover shadow-lg'
-    : 'w-14 h-14 sm:w-20 sm:h-20 rounded-full border-2 border-slate-600 object-cover shadow-lg';
+    ? `w-20 h-20 sm:w-28 sm:h-28 rounded-full border-2 border-slate-600 object-cover shadow-lg transition-transform duration-300 ${emphasisImg}`
+    : `w-14 h-14 sm:w-20 sm:h-20 rounded-full border-2 border-slate-600 object-cover shadow-lg transition-transform duration-300 ${emphasisImg}`;
   const cardMin = isArena ? 'min-w-[132px] sm:min-w-[188px] max-w-[220px]' : 'min-w-[112px] sm:min-w-[160px] max-w-[180px]';
 
   return (
