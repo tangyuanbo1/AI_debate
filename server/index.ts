@@ -876,6 +876,12 @@ ${historyText}
 任务：
 请严格依据“逻辑、修辞、反驳有效性、证据/事实支撑”进行评审。输出必须为简体中文，并使用 Markdown。
 
+【公平性要求（必须遵守）】
+- 不得因辩手是人类还是 AI 而预设分数；正方与反方适用同一套标准。
+- 若逐字稿中某一方明显未实质参与（如几乎无论点、仅敷衍），须在「缺点」中写明依据，但评分仍须与其实际贡献对应，避免无理由的极端低分或极端高分。
+- 评分应拉开区分度，但单辩手分数集中在 4–8 分更常见；仅在有逐字稿明确支撑时才使用 9–10 或 1–3。
+- 判决结论须与表格评分、交锋点一致，避免自相矛盾。
+
 你必须输出一个“逐个辩手”的量化与质化总结表格，然后给出判决与深度分析。
 
 ## 📊 辩手表现总览（必须为表格）
@@ -884,9 +890,9 @@ ${historyText}
 | Student 1 | 正方 | ... | ... | ... | ... |
 | Student 2 | 正方 | ... | ... | ... | ... |
 | Student 3 | 正方 | ... | ... | ... | ... |
-| AI (Alpha) | 反方 | ... | ... | ... | ... |
-| AI (Beta) | 反方 | ... | ... | ... | ... |
-| AI (Gamma) | 反方 | ... | ... | ... | ... |
+| 锐言 | 反方 | ... | ... | ... | ... |
+| 澈言 | 反方 | ... | ... | ... | ... |
+| 砺言 | 反方 | ... | ... | ... | ... |
 
 ## 🏆 判决结果: [获胜方队伍名称]
 给出明确的获胜方，并用 3-6 条 bullet 解释关键胜负手。
@@ -913,6 +919,12 @@ ${historyText}
 Task:
 Evaluate strictly based on logic, rhetoric, rebuttal effectiveness, and evidence support. Output MUST be in English and use Markdown.
 
+【Fairness rules (must follow)】
+- Do not preset scores based on whether the debater is human or AI; apply the same criteria to Pro and Con.
+- If one side barely participated, say so in Weaknesses with transcript evidence; scores must still reflect actual contribution—avoid unjustified extreme highs/lows.
+- Prefer differentiated scores in the ~4–8 range for most debaters; reserve 9–10 or 1–3 only when the transcript clearly supports it.
+- The verdict must be consistent with the table and the key clashes.
+
 You MUST produce a per-debater table first, then a verdict and deep analysis.
 
 ## 📊 Scoreboard (must be a table)
@@ -921,9 +933,9 @@ You MUST produce a per-debater table first, then a verdict and deep analysis.
 | Student 1 | Pro | ... | ... | ... | ... |
 | Student 2 | Pro | ... | ... | ... | ... |
 | Student 3 | Pro | ... | ... | ... | ... |
-| AI (Alpha) | Con | ... | ... | ... | ... |
-| AI (Beta) | Con | ... | ... | ... | ... |
-| AI (Gamma) | Con | ... | ... | ... | ... |
+| Rui | Con | ... | ... | ... | ... |
+| Che | Con | ... | ... | ... | ... |
+| Li | Con | ... | ... | ... | ... |
 
 ## 🏆 Verdict: [Winning team name]
 Give a clear winner and 3-6 bullets explaining the key deciding moments.
@@ -1001,8 +1013,8 @@ app.post('/api/judge', async (req, res) => {
         makeTextGenerationRequestBody({
           model: 'qwen-plus',
           messages,
-          temperature: 0.7,
-          topP: 0.9,
+          temperature: 0.45,
+          topP: 0.85,
           stream: false,
         }),
       ),
@@ -1051,8 +1063,8 @@ app.post('/api/judge/stream', async (req, res) => {
         makeTextGenerationRequestBody({
           model: 'qwen-plus',
           messages,
-          temperature: 0.7,
-          topP: 0.9,
+          temperature: 0.45,
+          topP: 0.85,
           stream: true,
         }),
       ),
@@ -1137,10 +1149,21 @@ function dashscopeTtsUrl(): string {
   return `${base}${TTS_PATH}`;
 }
 
+/** 三位 AI 辩手区分音色（男/女/中性），见前端 speakerId a1/a2/a3 */
+const TTS_VOICE_BY_SPEAKER: Record<string, { voice: string; zhExtra?: string; enExtra?: string }> = {
+  a1: { voice: 'Ethan', zhExtra: '偏沉稳男声，语速略快。', enExtra: 'Male, firm, slightly fast.' },
+  a2: { voice: 'Cherry', zhExtra: '偏亮女声，吐字清晰。', enExtra: 'Female, clear articulation.' },
+  a3: { voice: 'Chelsie', zhExtra: '女声略低沉、句子之间停顿稍明显。', enExtra: 'Female, slightly lower, clearer pauses between sentences.' },
+};
+
 app.post('/api/tts', async (req, res) => {
   try {
     const apiKey = getDashScopeApiKey();
-    const { text, lang } = (req.body ?? {}) as { text?: string; lang?: string };
+    const { text, lang, speakerId } = (req.body ?? {}) as {
+      text?: string;
+      lang?: string;
+      speakerId?: string;
+    };
     if (!text || typeof text !== 'string' || !text.trim()) {
       res.status(400).json({ error: 'Missing text' });
       return;
@@ -1149,15 +1172,16 @@ app.post('/api/tts', async (req, res) => {
     const isChinese =
       lang === 'zh-CN' ? true : lang === 'en-US' ? false : /[\u4e00-\u9fff]/.test(text);
     const languageType = isChinese ? 'Chinese' : 'English';
+    const voiceCfg = speakerId && TTS_VOICE_BY_SPEAKER[speakerId] ? TTS_VOICE_BY_SPEAKER[speakerId] : null;
     const instructions = isChinese
-      ? '全程使用同一说话人、音色与语气保持一致。语速比正常略快一点，吐字清晰；语气坚定、适合辩论，情绪起伏不要过大。'
-      : 'Use one consistent speaker and voice throughout. Slightly faster than normal pace, clear articulation; firm persuasive debate tone, avoid large emotional swings.';
+      ? `全程使用同一说话人、音色与语气保持一致。语速比正常略快一点，吐字清晰；语气坚定、适合辩论，情绪起伏不要过大。${voiceCfg?.zhExtra ?? ''}`
+      : `Use one consistent speaker and voice throughout. Slightly faster than normal pace, clear articulation; firm persuasive debate tone, avoid large emotional swings. ${voiceCfg?.enExtra ?? ''}`;
 
     const ttsBody = {
       model: 'qwen3-tts-instruct-flash',
       input: {
         text: text.trim().slice(0, 5000),
-        voice: 'Cherry',
+        voice: voiceCfg?.voice ?? 'Cherry',
         language_type: languageType,
         instructions,
         // 关闭后由固定指令主导，减少每句被「优化」成不同风格

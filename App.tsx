@@ -118,13 +118,17 @@ const App: React.FC = () => {
         tts: '情感语音播报',
         enterArgumentAs: '以 {name} 的身份发言…',
         speaking: '发言中',
+        thinkingStatus: '思考中',
+        teamPro: '正方',
+        teamCon: '反方',
+        subtitleLine: '当前',
         selectedStudent: '选中的学生',
         student1: '学生 1',
         student2: '学生 2',
         student3: '学生 3',
-        aiAlpha: 'AI（阿尔法）',
-        aiBeta: 'AI（贝塔）',
-        aiGamma: 'AI（伽马）',
+        aiAlpha: '锐言',
+        aiBeta: '澈言',
+        aiGamma: '砺言',
         speaker1st: '一辩',
         speaker2nd: '二辩',
         speaker3rd: '三辩',
@@ -233,13 +237,17 @@ const App: React.FC = () => {
         tts: 'Emotional TTS',
         enterArgumentAs: 'Enter argument as {name}...',
         speaking: 'Speaking',
+        thinkingStatus: 'Thinking…',
+        teamPro: 'Pro',
+        teamCon: 'Con',
+        subtitleLine: 'Now',
         selectedStudent: 'the selected student',
         student1: 'Student 1',
         student2: 'Student 2',
         student3: 'Student 3',
-        aiAlpha: 'AI (Alpha)',
-        aiBeta: 'AI (Beta)',
-        aiGamma: 'AI (Gamma)',
+        aiAlpha: 'Rui',
+        aiBeta: 'Che',
+        aiGamma: 'Li',
         speaker1st: '1st Speaker',
         speaker2nd: '2nd Speaker',
         speaker3rd: '3rd Speaker',
@@ -472,7 +480,11 @@ const App: React.FC = () => {
   };
   const [inputText, setInputText] = useState('');
   const [isAiThinking, setIsAiThinking] = useState(false);
-  
+  /** 流式生成前：用于头像区「思考中」与高亮 */
+  const [thinkingAiSpeakerId, setThinkingAiSpeakerId] = useState<string | null>(null);
+  /** 进入自由辩论后自动发起 AI 攻辩（仅一次 / 每场重置） */
+  const freeDebateAutoAttackFiredRef = useRef(false);
+
   // Voice Input State
   const [isRecording, setIsRecording] = useState(false);
   /** 点击录音后先显示说明弹窗，再在「继续」里触发 getUserMedia，便于出现浏览器自带授权框 */
@@ -491,15 +503,15 @@ const App: React.FC = () => {
   const [ttsHighlightIndex, setTtsHighlightIndex] = useState<number>(-1);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
-  const ttsQueueRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
+  const ttsQueueRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number; speakerId?: string } | null>(null);
   /** 句索引 → 该句 TTS 的 Promise（speakText 时并发预取整段，播放时直接 await） */
   const ttsPrefetchRef = useRef<Map<number, Promise<string | null>>>(new Map());
   const ttsCancelledRef = useRef<boolean>(false);
   /** 服务端已要求略快语速；播放时再微调，过大易变调 */
   const apiTtsPlaybackRate = 1.12;
   const browserTtsUtteranceRate = 1.08;
-  const ttsPausedRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
-  const ttsBrowserPlayRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number } | null>(null);
+  const ttsPausedRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number; speakerId?: string } | null>(null);
+  const ttsBrowserPlayRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number; speakerId?: string } | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem('ttsEnabled', String(ttsEnabled));
@@ -648,6 +660,7 @@ const App: React.FC = () => {
   const handleStart = (e: React.FormEvent) => {
     e.preventDefault();
     if (session.topic.trim()) {
+      freeDebateAutoAttackFiredRef.current = false;
       setSession(prev => ({ ...prev, isStarted: true, mode: 'structured', currentTurn: 0, history: [] }));
     }
   };
@@ -877,13 +890,13 @@ const App: React.FC = () => {
   };
 
   /** 并发预缓存整段各句的语音，避免播完一句再等下一句的网络 */
-  const prefetchTtsQueue = (sentences: string[], fromIndex: number) => {
+  const prefetchTtsQueue = (sentences: string[], fromIndex: number, speakerId?: string) => {
     for (let i = fromIndex; i < sentences.length; i++) {
       if (ttsPrefetchRef.current.has(i)) continue;
       const s = sentences[i];
       ttsPrefetchRef.current.set(
         i,
-        synthesizeSpeech(s, lang).catch(() => null),
+        synthesizeSpeech(s, lang, { speakerId }).catch(() => null),
       );
     }
   };
@@ -907,7 +920,7 @@ const App: React.FC = () => {
         url = await ttsPrefetchRef.current.get(idx)!;
         ttsPrefetchRef.current.delete(idx);
       } else {
-        url = await synthesizeSpeech(sentence, lang);
+        url = await synthesizeSpeech(sentence, lang, { speakerId: q.speakerId });
       }
     } catch {
       url = null;
@@ -918,7 +931,7 @@ const App: React.FC = () => {
       ttsPrefetchRef.current.clear();
       if (remaining.length > 0 && window.speechSynthesis) {
         setSpeakingArgId(q.argId);
-        ttsBrowserPlayRef.current = { argId: q.argId, sentences: q.sentences, nextToPlay: q.nextToPlay };
+        ttsBrowserPlayRef.current = { argId: q.argId, sentences: q.sentences, nextToPlay: q.nextToPlay, speakerId: q.speakerId };
         const playNextBrowser = (idx: number) => {
           if (ttsCancelledRef.current) return;
           if (idx >= remaining.length) {
@@ -928,7 +941,7 @@ const App: React.FC = () => {
             ttsBrowserPlayRef.current = null;
             return;
           }
-          ttsBrowserPlayRef.current = { argId: q.argId, sentences: q.sentences, nextToPlay: q.nextToPlay + idx };
+          ttsBrowserPlayRef.current = { argId: q.argId, sentences: q.sentences, nextToPlay: q.nextToPlay + idx, speakerId: q.speakerId };
           setTtsHighlightIndex(q.nextToPlay + idx);
           const u = new SpeechSynthesisUtterance(remaining[idx]);
           u.lang = lang;
@@ -972,7 +985,7 @@ const App: React.FC = () => {
     });
   };
 
-  const speakText = async (argId: string, text: string) => {
+  const speakText = async (argId: string, text: string, opts?: { speakerId?: string }) => {
     if (!ttsEnabled) return;
     if (!text?.trim()) return;
     if (speakingArgId === argId) {
@@ -988,20 +1001,22 @@ const App: React.FC = () => {
     setSpeakingArgId(argId);
     setTtsHighlightIndex(-1);
 
+    const speakerId = opts?.speakerId ?? paused?.speakerId;
+
     const sentences = paused ? paused.sentences : splitSentences(text);
     const startFrom = paused ? paused.nextToPlay : 0;
     const onEnd = () => setSpeakingArgId((prev) => (prev === argId ? null : prev));
 
     if (sentences.length > 0) {
-      ttsQueueRef.current = { argId, sentences, nextToPlay: startFrom };
-      prefetchTtsQueue(sentences, startFrom);
+      ttsQueueRef.current = { argId, sentences, nextToPlay: startFrom, speakerId };
+      prefetchTtsQueue(sentences, startFrom, speakerId);
       playNextInQueue();
       return;
     }
 
     let url: string | null = null;
     try {
-      url = await synthesizeSpeech(text, lang);
+      url = await synthesizeSpeech(text, lang, { speakerId });
     } catch {
       url = null;
     }
@@ -1041,6 +1056,32 @@ const App: React.FC = () => {
 
   const currentStep = session.mode === 'structured' ? DEBATE_SEQUENCE[session.currentTurn] : null;
   const isStudentTurn = Boolean(currentStep && !currentStep.debater.isAI);
+
+  const activeDebaterIdForHighlight = useMemo(() => {
+    if (isAiThinking && thinkingAiSpeakerId) return thinkingAiSpeakerId;
+    if (session.mode === 'structured' && currentStep) return currentStep.debater.id;
+    if (session.mode === 'freeDebate') {
+      const last = session.history[session.history.length - 1];
+      return last?.speakerId ?? null;
+    }
+    return null;
+  }, [session.mode, session.history, currentStep, isAiThinking, thinkingAiSpeakerId]);
+
+  const liveSubtitle = useMemo(() => {
+    const last = session.history[session.history.length - 1];
+    if (!last) return null;
+    const raw =
+      last.side === DebateSide.CON
+        ? (() => {
+            const { speech } = parseThinkingSpeech(last.text);
+            const s = speech.trim();
+            return s || (!last.text.includes('[[THINKING]]') ? last.text : '');
+          })()
+        : last.text;
+    const text = (raw || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!text) return null;
+    return { speakerId: last.speakerId, text };
+  }, [session.history]);
 
   const submitArgument = async (text: string) => {
     if (!text.trim()) return;
@@ -1111,6 +1152,7 @@ const App: React.FC = () => {
     targetSpeakerName?: string,
   ) => {
     setIsAiThinking(true);
+    setThinkingAiSpeakerId(responder.id);
     stopTtsPlayback();
     setSpeakingArgId(null);
     setTtsHighlightIndex(-1);
@@ -1153,6 +1195,7 @@ const App: React.FC = () => {
         const now = Date.now();
         if (isFirstChunk) {
           setIsAiThinking(false);
+          setThinkingAiSpeakerId(null);
           const aiArg: Argument = {
             id: aiArgId,
             speakerId: responder.id,
@@ -1181,12 +1224,13 @@ const App: React.FC = () => {
       if (ttsEnabled) {
         const { speech } = parseThinkingSpeech(fullText);
         const toRead = (speech || fullText || '').trim();
-        if (toRead) speakText(aiArgId, toRead);
+        if (toRead) speakText(aiArgId, toRead, { speakerId: responder.id });
       }
     } catch (error) {
       console.error('AI Generation Error', error);
     } finally {
       setIsAiThinking(false);
+      setThinkingAiSpeakerId(null);
     }
   };
 
@@ -1225,14 +1269,27 @@ const App: React.FC = () => {
     setPendingAiAttack({ aiId: ai.id, humanId: chosenHuman.id });
   };
 
+  /** 结构化 6 回合结束后进入自由辩论时，自动由 AI 发起首轮攻辩 */
+  useEffect(() => {
+    if (session.mode !== 'freeDebate' || !session.isStarted) return;
+    if (session.history.length !== DEBATE_SEQUENCE.length) return;
+    const tid = window.setTimeout(() => {
+      if (freeDebateAutoAttackFiredRef.current) return;
+      freeDebateAutoAttackFiredRef.current = true;
+      void startAiAttack();
+    }, 650);
+    return () => clearTimeout(tid);
+  }, [session.mode, session.isStarted, session.history.length]);
+
   const triggerAi = async (turnIndex: number, currentHistory: Argument[]) => {
+    const step = DEBATE_SEQUENCE[turnIndex];
     setIsAiThinking(true);
+    setThinkingAiSpeakerId(step.debater.id);
     stopTtsPlayback();
     setSpeakingArgId(null);
     setTtsHighlightIndex(-1);
     ttsQueueRef.current = null;
-    const step = DEBATE_SEQUENCE[turnIndex];
-    
+
     try {
       const streamResponse = await generateDebateResponseStream(
         session.topic,
@@ -1261,7 +1318,8 @@ const App: React.FC = () => {
           const now = Date.now();
 
           if (isFirstChunk) {
-            setIsAiThinking(false); // Stop thinking animation, show bubble
+            setIsAiThinking(false);
+            setThinkingAiSpeakerId(null);
             // Initialize the AI argument in the history
             const aiArg: Argument = {
               id: aiArgId,
@@ -1309,13 +1367,14 @@ const App: React.FC = () => {
       if (ttsEnabled) {
         const { speech } = parseThinkingSpeech(fullText);
         const toRead = (speech || fullText || '').trim();
-        if (toRead) speakText(aiArgId, toRead);
+        if (toRead) speakText(aiArgId, toRead, { speakerId: step.debater.id });
       }
 
     } catch (error) {
       console.error("AI Generation Error", error);
+    } finally {
+      setThinkingAiSpeakerId(null);
       setIsAiThinking(false);
-      // Optional: Add a system message or error bubble here
     }
   };
 
@@ -1867,36 +1926,53 @@ const App: React.FC = () => {
         {/* Stages View */}
         <div className="flex-1 flex flex-col px-4 py-6 sm:p-8 overflow-y-auto">
           
-          {/* Debaters Row */}
-          <div className="mb-8 sm:mb-12">
-            <div className="w-full flex items-center justify-start sm:justify-center gap-3 sm:gap-4 overflow-x-auto overflow-y-visible pb-3 px-1 flex-nowrap">
-              {STUDENT_TEAM.map((d) => (
-                <DebaterCard
-                  key={d.id}
-                  debater={d}
-                  isActive={currentStep?.debater.id === d.id}
-                  side="PRO"
-                  displayName={getDebaterName(d.id)}
-                  displayRole={getRoleName(d.role)}
-                  speakingLabel={t('speaking')}
-                />
-              ))}
+          {/* 3v3：两侧竖排，头像加大 */}
+          <div className="mb-6 sm:mb-10">
+            <div className="w-full max-w-4xl mx-auto flex flex-col sm:flex-row sm:items-stretch sm:justify-center gap-4 sm:gap-6">
+              <div className="flex flex-col items-center gap-1 flex-1 min-w-0">
+                <div className="text-[11px] font-black uppercase tracking-widest text-blue-400/90 mb-1">{t('teamPro')}</div>
+                <div className="flex flex-row sm:flex-col gap-3 sm:gap-4 w-full justify-center sm:items-center">
+                  {STUDENT_TEAM.map((d) => (
+                    <DebaterCard
+                      key={d.id}
+                      debater={d}
+                      isActive={activeDebaterIdForHighlight === d.id}
+                      isThinking={Boolean(thinkingAiSpeakerId === d.id && isAiThinking)}
+                      thinkingLabel={t('thinkingStatus')}
+                      size="arena"
+                      side="PRO"
+                      displayName={getDebaterName(d.id)}
+                      displayRole={getRoleName(d.role)}
+                      speakingLabel={t('speaking')}
+                    />
+                  ))}
+                </div>
+              </div>
 
-              <div className="shrink-0 px-2 sm:px-4">
-                <div className="text-xs sm:text-sm font-black text-slate-500 italic select-none">VS</div>
-            </div>
+              <div className="flex flex-col items-center justify-center shrink-0 py-2 sm:py-0">
+                <div className="text-sm sm:text-lg font-black text-slate-500 italic select-none px-2">VS</div>
+                <div className="text-[10px] text-slate-600 mt-1 hidden sm:block">3v3</div>
+              </div>
 
-              {AI_TEAM.map((d) => (
-                <DebaterCard
-                  key={d.id}
-                  debater={d}
-                  isActive={currentStep?.debater.id === d.id}
-                  side="CON"
-                  displayName={getDebaterName(d.id)}
-                  displayRole={getRoleName(d.role)}
-                  speakingLabel={t('speaking')}
-                />
-              ))}
+              <div className="flex flex-col items-center gap-1 flex-1 min-w-0">
+                <div className="text-[11px] font-black uppercase tracking-widest text-red-400/90 mb-1">{t('teamCon')}</div>
+                <div className="flex flex-row sm:flex-col gap-3 sm:gap-4 w-full justify-center sm:items-center">
+                  {AI_TEAM.map((d) => (
+                    <DebaterCard
+                      key={d.id}
+                      debater={d}
+                      isActive={activeDebaterIdForHighlight === d.id}
+                      isThinking={Boolean(thinkingAiSpeakerId === d.id && isAiThinking)}
+                      thinkingLabel={t('thinkingStatus')}
+                      size="arena"
+                      side="CON"
+                      displayName={getDebaterName(d.id)}
+                      displayRole={getRoleName(d.role)}
+                      speakingLabel={t('speaking')}
+                    />
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1979,17 +2055,20 @@ const App: React.FC = () => {
               </div>
             ))}
 
-            {isAiThinking && (
+            {isAiThinking && thinkingAiSpeakerId && (
               <div className="flex flex-col items-end animate-pulse">
-                <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 w-full sm:w-1/2">
-                    <div className="flex items-center gap-3 flex-row-reverse">
-                        <div className="w-8 h-8 bg-slate-700 rounded-full"></div>
-                        <div className="space-y-2 flex-1 flex flex-col items-end">
-                            <div className="h-3 bg-slate-700 rounded w-1/4"></div>
-                            <div className="h-3 bg-slate-700 rounded w-full"></div>
-                            <div className="h-3 bg-slate-700 rounded w-3/4"></div>
-                        </div>
+                <div className="bg-slate-800 rounded-2xl px-5 py-4 border border-amber-500/40 w-full sm:w-1/2 shadow-lg shadow-amber-900/20">
+                  <div className="flex items-center justify-end gap-3 flex-row-reverse">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-500/30 to-slate-700 flex items-center justify-center text-lg">
+                      💭
                     </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="text-xs font-bold text-amber-400/90 uppercase tracking-wider">
+                        {getDebaterName(thinkingAiSpeakerId)}
+                      </span>
+                      <span className="text-sm font-black text-amber-200">{t('thinkingStatus')}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -2016,6 +2095,16 @@ const App: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {liveSubtitle && session.isStarted && !isDebateOver && (
+        <div className="shrink-0 border-t border-slate-800/80 bg-slate-950/90 backdrop-blur-sm px-3 py-2.5 text-sm">
+          <div className="max-w-5xl mx-auto flex gap-2 min-w-0 items-baseline">
+            <span className="text-slate-500 text-xs font-bold shrink-0">{t('subtitleLine')}</span>
+            <span className="font-black text-slate-200 shrink-0">{getDebaterName(liveSubtitle.speakerId)}</span>
+            <span className="text-slate-400 truncate italic text-[13px] leading-snug">{liveSubtitle.text}</span>
+          </div>
+        </div>
+      )}
 
       {/* Persistent Control Bar */}
       <footer className="bg-slate-900 border-t border-slate-800 p-4 sm:p-6">

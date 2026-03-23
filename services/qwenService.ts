@@ -170,7 +170,11 @@ function delay(ms: number) {
 }
 
 /** 阿里云 Qwen3-TTS；返回 Blob URL，用完后需 revokeObjectURL。失败返回 null，由界面回退浏览器 TTS。 */
-export async function synthesizeSpeech(text: string, lang: 'zh-CN' | 'en-US'): Promise<string | null> {
+export async function synthesizeSpeech(
+  text: string,
+  lang: 'zh-CN' | 'en-US',
+  opts?: { speakerId?: string },
+): Promise<string | null> {
   if (ttsRouteMissing) return null;
   await acquireTtsSlot();
   try {
@@ -182,7 +186,7 @@ export async function synthesizeSpeech(text: string, lang: 'zh-CN' | 'en-US'): P
       const resp = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: trimmed, lang }),
+        body: JSON.stringify({ text: trimmed, lang, speakerId: opts?.speakerId }),
       });
 
       if (resp.ok) {
