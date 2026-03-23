@@ -1149,12 +1149,15 @@ function dashscopeTtsUrl(): string {
   return `${base}${TTS_PATH}`;
 }
 
-/** 三位 AI 辩手区分音色（男/女/中性），见前端 speakerId a1/a2/a3 */
-/** 与 DashScope SDK 文档一致：voice 取系统音色英文名，见 https://help.aliyun.com/zh/model-studio/qwen-tts */
+/**
+ * 三位 AI 辩手：voice 须与当前 TTS model 的「支持的系统音色」表一致。
+ * 使用 qwen3-tts-instruct-flash 时，勿选仅列在 Flash 行、未列 Instruct-Flash 行的音色（如 Sunny），否则会回退/异常。
+ * 文档：https://help.aliyun.com/zh/model-studio/qwen-tts
+ */
 const TTS_VOICE_BY_SPEAKER: Record<string, { voice: string; zhExtra?: string; enExtra?: string }> = {
-  a1: { voice: 'Ethan', zhExtra: '偏沉稳男声，语速略快。', enExtra: 'Male, firm, slightly fast.' },
-  a2: { voice: 'Cherry', zhExtra: '偏亮女声，吐字清晰。', enExtra: 'Female, clear articulation.' },
-  a3: { voice: 'Sunny', zhExtra: '偏暖、略亮的女声，与 Cherry 区分明显。', enExtra: 'Warmer, slightly bright female voice, distinct from Cherry.' },
+  a1: { voice: 'Ethan', zhExtra: '男声（晨煦），阳光稳重，语速略快。', enExtra: 'Male voice, warm and steady, slightly fast.' },
+  a2: { voice: 'Cherry', zhExtra: '女声（芊悦），阳光清晰。', enExtra: 'Female voice, bright and clear.' },
+  a3: { voice: 'Chelsie', zhExtra: '女声（千雪），与芊悦风格区分明显。', enExtra: 'Female voice, distinct character from Cherry.' },
 };
 
 app.post('/api/tts', async (req, res) => {
