@@ -1150,10 +1150,11 @@ function dashscopeTtsUrl(): string {
 }
 
 /** 三位 AI 辩手区分音色（男/女/中性），见前端 speakerId a1/a2/a3 */
+/** 与 DashScope SDK 文档一致：voice 取系统音色英文名，见 https://help.aliyun.com/zh/model-studio/qwen-tts */
 const TTS_VOICE_BY_SPEAKER: Record<string, { voice: string; zhExtra?: string; enExtra?: string }> = {
   a1: { voice: 'Ethan', zhExtra: '偏沉稳男声，语速略快。', enExtra: 'Male, firm, slightly fast.' },
   a2: { voice: 'Cherry', zhExtra: '偏亮女声，吐字清晰。', enExtra: 'Female, clear articulation.' },
-  a3: { voice: 'Chelsie', zhExtra: '女声略低沉、句子之间停顿稍明显。', enExtra: 'Female, slightly lower, clearer pauses between sentences.' },
+  a3: { voice: 'Sunny', zhExtra: '偏暖、略亮的女声，与 Cherry 区分明显。', enExtra: 'Warmer, slightly bright female voice, distinct from Cherry.' },
 };
 
 app.post('/api/tts', async (req, res) => {
@@ -1174,8 +1175,8 @@ app.post('/api/tts', async (req, res) => {
     const languageType = isChinese ? 'Chinese' : 'English';
     const voiceCfg = speakerId && TTS_VOICE_BY_SPEAKER[speakerId] ? TTS_VOICE_BY_SPEAKER[speakerId] : null;
     const instructions = isChinese
-      ? `全程使用同一说话人、音色与语气保持一致。语速比正常略快一点，吐字清晰；语气坚定、适合辩论，情绪起伏不要过大。${voiceCfg?.zhExtra ?? ''}`
-      : `Use one consistent speaker and voice throughout. Slightly faster than normal pace, clear articulation; firm persuasive debate tone, avoid large emotional swings. ${voiceCfg?.enExtra ?? ''}`;
+      ? `本条语音内保持所选系统音色稳定、语气一致。语速比正常略快一点，吐字清晰；语气坚定、适合辩论，情绪起伏不要过大。${voiceCfg?.zhExtra ?? ''}`
+      : `Keep the selected system voice stable within this clip. Slightly faster than normal pace, clear articulation; firm persuasive debate tone, avoid large emotional swings. ${voiceCfg?.enExtra ?? ''}`;
 
     const ttsBody = {
       model: 'qwen3-tts-instruct-flash',

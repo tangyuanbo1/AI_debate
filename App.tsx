@@ -121,7 +121,6 @@ const App: React.FC = () => {
         thinkingStatus: '思考中',
         teamPro: '正方',
         teamCon: '反方',
-        subtitleLine: '当前',
         selectedStudent: '选中的学生',
         student1: '学生 1',
         student2: '学生 2',
@@ -241,7 +240,6 @@ const App: React.FC = () => {
         thinkingStatus: 'Thinking…',
         teamPro: 'Pro',
         teamCon: 'Con',
-        subtitleLine: 'Now',
         selectedStudent: 'the selected student',
         student1: 'Student 1',
         student2: 'Student 2',
@@ -1136,16 +1134,6 @@ const App: React.FC = () => {
     }
     return null;
   }, [session.mode, session.history, currentStep, isAiThinking, thinkingAiSpeakerId, speakingArgId]);
-
-  const liveSubtitle = useMemo(() => {
-    const last = session.history[session.history.length - 1];
-    if (!last) return null;
-    const raw =
-      last.side === DebateSide.CON ? getConBubbleDisplay(last.text).text : last.text;
-    const text = (raw || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-    if (!text) return null;
-    return { speakerId: last.speakerId, text };
-  }, [session.history]);
 
   const submitArgument = async (text: string) => {
     if (!text.trim()) return;
@@ -2170,16 +2158,6 @@ const App: React.FC = () => {
           </div>
         </div>
       </main>
-
-      {liveSubtitle && session.isStarted && !isDebateOver && (
-        <div className="shrink-0 border-t border-slate-800/80 bg-slate-950/90 backdrop-blur-sm px-3 py-2.5 text-sm">
-          <div className="max-w-5xl mx-auto flex gap-2 min-w-0 items-baseline">
-            <span className="text-slate-500 text-xs font-bold shrink-0">{t('subtitleLine')}</span>
-            <span className="font-black text-slate-200 shrink-0">{getDebaterName(liveSubtitle.speakerId)}</span>
-            <span className="text-slate-400 truncate italic text-[13px] leading-snug">{liveSubtitle.text}</span>
-          </div>
-        </div>
-      )}
 
       {/* Persistent Control Bar */}
       <footer className="bg-slate-900 border-t border-slate-800 p-4 sm:p-6">
