@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import ReactMarkdown from 'react-markdown'; 
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 import { STUDENT_TEAM, AI_TEAM, DEBATE_SEQUENCE } from './constants';
 import { DebateSession, Argument, DebateSide } from './types';
-import { generateDebateResponseStream, generateJudgeVerdict, transcribeAudio, synthesizeSpeech } from './services/qwenService';
+import { generateDebateResponseStream, generateJudgeVerdictStream, transcribeAudio, synthesizeSpeech } from './services/qwenService';
 import DebaterCard from './components/DebaterCard';
 
 declare global {
@@ -110,8 +111,8 @@ const App: React.FC = () => {
         debateSaveNamePlaceholder: '输入存档名称（可选）',
         debateSaving: '保存中…',
         freeDebateTitle: '自由辩论',
-        freeDebateHint: '选择人方发言者与 AI 回答者，可连续攻防。点击“结束自由辩论”进入裁判。',
-        freeDebateAttacker: '人方发言者',
+        freeDebateHint: '选择本轮发言学生与 AI 回答者，可连续攻防。点击「结束自由辩论」进入裁判。',
+        freeDebateAttacker: '本轮发言学生',
         freeDebateResponder: 'AI 回答者',
         freeDebateEnd: '结束自由辩论',
         tts: '情感语音播报',
@@ -225,8 +226,8 @@ const App: React.FC = () => {
         debateSaveNamePlaceholder: 'Archive name (optional)',
         debateSaving: 'Saving...',
         freeDebateTitle: 'Free Debate',
-        freeDebateHint: 'Pick a Human speaker and an AI responder. You may attack continuously. Click “End Free Debate” to go to judging.',
-        freeDebateAttacker: 'Human speaker',
+        freeDebateHint: 'Pick which student speaks this round and which AI responds. You may attack continuously. Click “End Free Debate” to go to judging.',
+        freeDebateAttacker: 'Speaking student (this round)',
         freeDebateResponder: 'AI responder',
         freeDebateEnd: 'End Free Debate',
         tts: 'Emotional TTS',
@@ -1319,14 +1320,30 @@ const App: React.FC = () => {
   };
 
   const handleCallJudge = async () => {
+    setJudgeVerdict('');
     setIsJudgeThinking(true);
-    const verdict = await generateJudgeVerdict(session.topic, session.history, lang, {
-      enabled: kbEnabled,
-      selectedDocIds: kbSelectedDocIds,
-      topK: 8,
-    });
-    setJudgeVerdict(verdict || t('judgeUnavailable'));
-    setIsJudgeThinking(false);
+    try {
+      let acc = '';
+      for await (const chunk of generateJudgeVerdictStream(session.topic, session.history, lang, {
+        enabled: kbEnabled,
+        selectedDocIds: kbSelectedDocIds,
+        topK: 8,
+      })) {
+        if (chunk?.error) throw new Error(chunk.error);
+        if (chunk?.text) {
+          acc += chunk.text;
+          setJudgeVerdict(acc);
+        }
+      }
+      if (!acc.trim()) {
+        setJudgeVerdict(t('judgeUnavailable'));
+      }
+    } catch (e) {
+      console.error('Judge stream error', e);
+      setJudgeVerdict(t('judgeUnavailable'));
+    } finally {
+      setIsJudgeThinking(false);
+    }
   };
 
   const saveDebateArchive = async () => {
@@ -1918,49 +1935,41 @@ const App: React.FC = () => {
                   </div>
                   {arg.side === DebateSide.CON ? (
                     (() => {
-                      const { thinking, speech, isThinkingPhase } = parseThinkingSpeech(arg.text);
+                      const { speech } = parseThinkingSpeech(arg.text);
+                      const displaySpeech =
+                        speech.trim() !== ''
+                          ? speech
+                          : !arg.text.includes('[[THINKING]]')
+                            ? arg.text
+                            : '';
+                      if (!displaySpeech.trim()) {
+                        return null;
+                      }
                       return (
-                        <div className="space-y-3">
-                          {thinking && (
-                            <details
-                              className="bg-slate-950/30 border border-slate-700 rounded-xl p-3"
-                              open={isThinkingPhase ? true : undefined}
-                            >
-                              <summary className="cursor-pointer text-xs font-bold text-slate-300 select-none">
-                                {t('thinkingExpand')}
-                              </summary>
-                              <pre className="mt-2 text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
-                                {thinking}
-                              </pre>
-                            </details>
-                          )}
-                          {speech && (
-                            <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">
-                              {(() => {
-                                const parts = speech.split(/(?<=[。！？.!?])\s*/);
-                                const complete = parts.filter((p) => /[。！？.!?]\s*$/.test(p.trim()));
-                                const remainder = parts.length > complete.length ? parts.slice(complete.length).join('') : '';
-                                return (
-                                  <>
-                                    {complete.map((sent, i) => (
-                                      <span
-                                        key={i}
-                                        className={
-                                          speakingArgId === arg.id && ttsHighlightIndex === i
-                                            ? 'bg-amber-400/35 text-amber-100 rounded px-1 -mx-0.5 transition-colors duration-200'
-                                            : ''
-                                        }
-                                      >
-                                        {sent}
-                                      </span>
-                                    ))}
-                                    {remainder ? <span>{remainder}</span> : null}
-                                  </>
-                                );
-                              })()}
-                            </p>
-                          )}
-                        </div>
+                        <p className="leading-relaxed text-slate-200 italic whitespace-pre-wrap">
+                          {(() => {
+                            const parts = displaySpeech.split(/(?<=[。！？.!?])\s*/);
+                            const complete = parts.filter((p) => /[。！？.!?]\s*$/.test(p.trim()));
+                            const remainder = parts.length > complete.length ? parts.slice(complete.length).join('') : '';
+                            return (
+                              <>
+                                {complete.map((sent, i) => (
+                                  <span
+                                    key={i}
+                                    className={
+                                      speakingArgId === arg.id && ttsHighlightIndex === i
+                                        ? 'bg-amber-400/35 text-amber-100 rounded px-1 -mx-0.5 transition-colors duration-200'
+                                        : ''
+                                    }
+                                  >
+                                    {sent}
+                                  </span>
+                                ))}
+                                {remainder ? <span>{remainder}</span> : null}
+                              </>
+                            );
+                          })()}
+                        </p>
                       );
                     })()
                   ) : (
@@ -1985,8 +1994,8 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {/* Verdict Display Section - Scrolls into view when ready */}
-            {judgeVerdict && (
+            {/* Verdict Display Section - 流式生成时同步展示 */}
+            {judgeVerdict !== null && (
                 <div ref={verdictRef} className="mt-8 animate-fade-in-up">
                     <div className="bg-slate-800 rounded-3xl border-2 border-yellow-600/50 overflow-hidden shadow-2xl shadow-yellow-900/20">
                         <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-4 border-b border-yellow-600/30 flex items-center gap-3">
@@ -1996,8 +2005,8 @@ const App: React.FC = () => {
                                 <p className="text-xs text-yellow-500/60">{t('verdictSubtitle')}</p>
                             </div>
                         </div>
-                        <div className="p-4 sm:p-8">
-                            <ReactMarkdown components={verdictMarkdownComponents}>
+                        <div className="p-4 sm:p-8 text-slate-200 [&_a]:text-blue-400 [&_a]:underline">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={verdictMarkdownComponents}>
                             {judgeVerdict}
                             </ReactMarkdown>
                         </div>
@@ -2013,7 +2022,7 @@ const App: React.FC = () => {
         <div className="max-w-5xl mx-auto">
           {isDebateOver ? (
             <div className="transition-all duration-500">
-                {!judgeVerdict && !isJudgeThinking && (
+                {judgeVerdict === null && !isJudgeThinking && (
                     <div className="text-center p-8 bg-gradient-to-r from-slate-800 to-slate-800 border border-slate-700 rounded-2xl">
                     <h3 className="text-2xl font-bold mb-2 text-white">{t('debateConcluded')}</h3>
                     <p className="text-slate-400 mb-6 italic">{t('timeForJudgment')}</p>
@@ -2269,16 +2278,50 @@ const App: React.FC = () => {
                         value={inputText}
                         onChange={(e) => setInputText(e.target.value)}
                         placeholder={t('enterArgumentAs', { name: getDebaterName(pendingAiAttack?.humanId ?? freeAttackerId) })}
-                        className="w-full bg-slate-800 border-2 border-blue-500/30 focus:border-blue-500 rounded-2xl py-4 px-6 pr-24 outline-none text-white resize-none h-24 transition-all"
-                        disabled={isAiThinking}
+                        className="w-full bg-slate-800 border-2 border-blue-500/30 focus:border-blue-500 rounded-2xl py-4 px-6 pl-14 pr-24 outline-none text-white resize-none h-24 transition-all"
+                        disabled={isAiThinking || isRecording || isTranscribing}
                       />
+                      {sttSupported && (
+                        <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={toggleRecording}
+                            className={`p-2 rounded-full transition-all duration-300 flex items-center justify-center ${
+                              isRecording
+                                ? 'bg-red-500 text-white ring-4 ring-red-500/30 animate-pulse'
+                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white'
+                            }`}
+                            title={isRecording ? t('stopRecording') : t('clickToRecord')}
+                          >
+                            {isRecording ? (
+                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <rect x="6" y="6" width="12" height="12" rx="1" />
+                              </svg>
+                            ) : (
+                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                                />
+                              </svg>
+                            )}
+                          </button>
+                          {(isRecording || isTranscribing) && (
+                            <span className="text-xs font-bold text-slate-400 animate-pulse">
+                              {isRecording ? t('recording') : t('transcribing')}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <div className="absolute bottom-4 right-4 text-xs text-slate-500">
                         {t('markdownSupported')}
                       </div>
                     </div>
                     <button
                       onClick={() => submitFreeDebate(inputText)}
-                      disabled={!inputText.trim() || isAiThinking}
+                      disabled={!inputText.trim() || isAiThinking || isRecording || isTranscribing}
                       className="w-full sm:w-auto px-10 py-4 sm:py-0 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-900/20 active:scale-95 flex items-center justify-center gap-2"
                     >
                       {t('sendArgument')}

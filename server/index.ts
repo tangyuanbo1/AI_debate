@@ -851,24 +851,22 @@ Write ONE coherent paragraph describing your reasoning route (readable; do NOT r
   }
 });
 
-// 裁判判词：非流式一次性返回
-app.post('/api/judge', async (req, res) => {
-  try {
-    const apiKey = getDashScopeApiKey();
-    const { topic, history, lang } = (req.body ?? {}) as {
-      topic: string;
-      history: DebateArgument[];
-      lang?: ModelLang;
-    };
+/** 裁判：构造与 /api/judge 相同的 messages（含知识库拼接） */
+async function buildJudgeDashScopeMessages(opts: {
+  topic: string;
+  history: DebateArgument[];
+  lang?: ModelLang;
+  kb?: KbConfig;
+}): Promise<{ messages: DashScopeMessage[]; kbDebug?: any }> {
+  const { topic, history, lang, kb } = opts;
 
-    const historyText = (Array.isArray(history) ? history : [])
-      .map((arg) => `[${arg.side}] ${arg.speakerName} (${arg.id}): ${arg.text}`)
-      .join('\n\n');
+  const historyText = (Array.isArray(history) ? history : [])
+    .map((arg) => `[${arg.side}] ${arg.speakerName} (${arg.id}): ${arg.text}`)
+    .join('\n\n');
 
-    const effectiveLang: ModelLang = lang === 'zh-CN' || lang === 'en-US' ? lang : 'auto';
-    const kb = (req.body ?? {})?.kb as KbConfig | undefined;
+  const effectiveLang: ModelLang = lang === 'zh-CN' || lang === 'en-US' ? lang : 'auto';
 
-    const promptZh = `
+  const promptZh = `
 你是“课堂辩论”的首席法官。辩论已结束。
 辩题：“${topic}”
 
@@ -905,7 +903,7 @@ ${historyText}
 以“关键交锋点”为主线，解释为什么赢家赢（不要泛泛而谈），并指出输方如果想翻盘最该补哪三刀。
 `.trim();
 
-    const promptEn = `
+  const promptEn = `
 You are the Chief Justice of a Classroom Debate. The debate has concluded.
 Topic: "${topic}"
 
@@ -942,7 +940,7 @@ Give a clear winner and 3-6 bullets explaining the key deciding moments.
 Walk through the key clashes and explain precisely why the winner won. Also suggest the top 3 changes the losing team needed to flip the outcome.
 `.trim();
 
-    const promptAuto = `
+  const promptAuto = `
 You are the Chief Justice of the Debate Arena. The debate has concluded.
 You MUST output in the same language as the transcript.
 Use Markdown and follow ONE of the following formats (choose the matching language format, output only one).
@@ -954,13 +952,43 @@ ${promptZh}
 ${promptEn}
 `.trim();
 
-    const prompt = effectiveLang === 'zh-CN' ? promptZh : effectiveLang === 'en-US' ? promptEn : promptAuto;
-    const kbBuilt = await buildKbContext({
-      query: `Topic: ${topic}\nJudge task: final verdict based on transcript.\nTranscript:\n${historyText}`,
-      lang: effectiveLang,
-      kb,
-    });
-    const kbContext = typeof kbBuilt === 'string' ? kbBuilt : kbBuilt.context;
+  const prompt = effectiveLang === 'zh-CN' ? promptZh : effectiveLang === 'en-US' ? promptEn : promptAuto;
+  const kbBuilt = await buildKbContext({
+    query: `Topic: ${topic}\nJudge task: final verdict based on transcript.\nTranscript:\n${historyText}`,
+    lang: effectiveLang,
+    kb,
+  });
+  const kbContext = typeof kbBuilt === 'string' ? kbBuilt : kbBuilt.context;
+  const kbDebug = typeof kbBuilt !== 'string' ? kbBuilt.debug : undefined;
+
+  const messages: DashScopeMessage[] = [
+    {
+      role: 'system',
+      content:
+        effectiveLang === 'zh-CN'
+          ? '你是严谨且公正的辩论裁判。输出只包含判词内容。'
+          : effectiveLang === 'en-US'
+            ? 'You are a strict and fair debate judge. Output ONLY the verdict content.'
+            : 'You are a strict and fair debate judge. Output ONLY the verdict content in the same language as the transcript.',
+    },
+    { role: 'user', content: prompt + kbContext },
+  ];
+
+  return { messages, kbDebug };
+}
+
+// 裁判判词：非流式一次性返回
+app.post('/api/judge', async (req, res) => {
+  try {
+    const apiKey = getDashScopeApiKey();
+    const { topic, history, lang } = (req.body ?? {}) as {
+      topic: string;
+      history: DebateArgument[];
+      lang?: ModelLang;
+    };
+    const kb = (req.body ?? {})?.kb as KbConfig | undefined;
+
+    const { messages } = await buildJudgeDashScopeMessages({ topic, history, lang, kb });
 
     const upstream = await fetch(dashscopeTextGenUrl(), {
       method: 'POST',
@@ -972,18 +1000,7 @@ ${promptEn}
       body: JSON.stringify(
         makeTextGenerationRequestBody({
           model: 'qwen-plus',
-          messages: [
-            {
-              role: 'system',
-              content:
-                effectiveLang === 'zh-CN'
-                  ? '你是严谨且公正的辩论裁判。输出只包含判词内容。'
-                  : effectiveLang === 'en-US'
-                    ? 'You are a strict and fair debate judge. Output ONLY the verdict content.'
-                    : 'You are a strict and fair debate judge. Output ONLY the verdict content in the same language as the transcript.',
-            },
-            { role: 'user', content: prompt + kbContext },
-          ],
+          messages,
           temperature: 0.7,
           topP: 0.9,
           stream: false,
@@ -1002,6 +1019,106 @@ ${promptEn}
     res.json({ text });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Unknown error' });
+  }
+});
+
+// 裁判判词：流式 SSE（与 /api/judge 相同的提示词与知识库）
+app.post('/api/judge/stream', async (req, res) => {
+  sseHeaders(res);
+
+  try {
+    const apiKey = getDashScopeApiKey();
+    const { topic, history, lang } = (req.body ?? {}) as {
+      topic: string;
+      history: DebateArgument[];
+      lang?: ModelLang;
+    };
+    const kb = (req.body ?? {})?.kb as KbConfig | undefined;
+
+    const { messages, kbDebug } = await buildJudgeDashScopeMessages({ topic, history, lang, kb });
+    if (kb?.debug && kbDebug) {
+      sseSend(res, { debug: kbDebug }, 'kb_debug');
+    }
+
+    const upstream = await fetch(dashscopeTextGenUrl(), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify(
+        makeTextGenerationRequestBody({
+          model: 'qwen-plus',
+          messages,
+          temperature: 0.7,
+          topP: 0.9,
+          stream: true,
+        }),
+      ),
+    });
+
+    if (!upstream.ok) {
+      const errText = await upstream.text().catch(() => '');
+      sseSend(res, { text: '', error: `DashScope error: ${upstream.status} ${errText}` }, 'error');
+      sseSend(res, { done: true }, 'done');
+      res.end();
+      return;
+    }
+
+    const reader = upstream.body?.getReader();
+    if (!reader) {
+      const json = await upstream.json().catch(() => null);
+      const full = json ? extractTextFromDashScopePayload(json) : '';
+      if (full) sseSend(res, { text: full });
+      sseSend(res, { done: true }, 'done');
+      res.end();
+      return;
+    }
+
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let prevEmitted = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const events = buffer.split('\n\n');
+      buffer = events.pop() ?? '';
+
+      for (const evt of events) {
+        const lines = evt.split('\n').map((l) => l.trim());
+        const dataLines = lines.filter((l) => l.startsWith('data:'));
+        for (const dl of dataLines) {
+          const raw = dl.replace(/^data:\s*/, '');
+          if (!raw || raw === '[DONE]') continue;
+          try {
+            const payload = JSON.parse(raw);
+            const text = extractTextFromDashScopePayload(payload);
+            if (!text) continue;
+            let delta = text;
+            if (prevEmitted && text.startsWith(prevEmitted)) {
+              delta = text.slice(prevEmitted.length);
+              prevEmitted = text;
+            } else {
+              prevEmitted += text;
+            }
+            if (delta) sseSend(res, { text: delta });
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+
+    sseSend(res, { done: true }, 'done');
+    res.end();
+  } catch (e: any) {
+    sseSend(res, { text: '', error: e?.message || 'Unknown error' }, 'error');
+    sseSend(res, { done: true }, 'done');
+    res.end();
   }
 });
 

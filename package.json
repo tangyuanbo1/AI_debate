@@ -19,7 +19,8 @@
     "react-dom": "^19.2.3",
     "react": "^19.2.3",
     "@google/genai": "^1.34.0",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
     "concurrently": "^9.2.0",

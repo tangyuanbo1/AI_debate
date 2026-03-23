@@ -105,6 +105,31 @@ export async function generateJudgeVerdict(
   return json.text ?? "";
 }
 
+/** 裁判判词流式 SSE，与辩论流相同 data 格式 */
+export async function* generateJudgeVerdictStream(
+  topic: string,
+  history: Argument[],
+  lang: 'zh-CN' | 'en-US' | 'auto',
+  kb?: { enabled?: boolean; selectedDocIds?: string[]; topK?: number; debug?: boolean }
+): AsyncGenerator<StreamChunk> {
+  const resp = await fetch("/api/judge/stream", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ topic, history, lang, kb }),
+  });
+
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new Error(`Judge API error: ${resp.status} ${detail}`);
+  }
+
+  for await (const chunk of sseToChunks(resp)) {
+    yield chunk;
+  }
+}
+
 export async function transcribeAudio(_base64Audio: string, _mimeType: string): Promise<string> {
   // 这里的原实现依赖 Gemini 多模态；DashScope 的语音识别需要单独接入语音服务。
   // 先返回空字符串，避免前端弹“失败”提示。
