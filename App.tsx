@@ -34,6 +34,7 @@ const App: React.FC = () => {
   const t = useMemo(() => {
     const dict: Record<Language, Record<string, string>> = {
       'zh-CN': {
+        appBrandBanner: '稔知EVOVA-ClassMate',
         appTitle: '课堂辩论',
         appSubtitle: '人类 vs 人工智能',
         debateTopicLabel: '辩题',
@@ -153,6 +154,7 @@ const App: React.FC = () => {
         aiPreparingSpeech: '正在组织语言…',
       },
       'en-US': {
+        appBrandBanner: '稔知EVOVA-ClassMate',
         appTitle: 'Classroom Debate',
         appSubtitle: 'Humans vs. Artificial Intelligence',
         debateTopicLabel: 'Debate Topic',
@@ -930,9 +932,11 @@ const App: React.FC = () => {
     return text.split(/(?<=[。！？.!?])\s*/).filter((s) => s.trim() && /[。！？.!?]\s*$/.test(s.trim()));
   };
 
-  /** 并发预缓存整段各句的语音，避免播完一句再等下一句的网络 */
+  /** 只预取后续少量句子，避免一次性并行十几路请求触发 DashScope 429 */
+  const TTS_PREFETCH_WINDOW = 3;
   const prefetchTtsQueue = (sentences: string[], fromIndex: number, speakerId?: string) => {
-    for (let i = fromIndex; i < sentences.length; i++) {
+    const end = Math.min(sentences.length, fromIndex + TTS_PREFETCH_WINDOW);
+    for (let i = fromIndex; i < end; i++) {
       if (ttsPrefetchRef.current.has(i)) continue;
       const s = sentences[i];
       ttsPrefetchRef.current.set(
@@ -956,6 +960,7 @@ const App: React.FC = () => {
       return;
     }
     const idx = q.nextToPlay;
+    prefetchTtsQueue(q.sentences, idx, q.speakerId);
     const sentence = q.sentences[idx];
     let url: string | null = null;
     try {
@@ -1052,7 +1057,10 @@ const App: React.FC = () => {
     setSpeakingArgId(argId);
     setTtsHighlightIndex(-1);
 
-    const speakerId = opts?.speakerId ?? paused?.speakerId;
+    const speakerId =
+      opts?.speakerId ??
+      paused?.speakerId ??
+      session.history.find((a) => a.id === argId)?.speakerId;
 
     const sentences = paused ? paused.sentences : splitSentences(text);
     const startFrom = paused ? paused.nextToPlay : 0;
@@ -1499,6 +1507,9 @@ const App: React.FC = () => {
       <div className="min-h-screen flex flex-col items-center justify-center px-4 py-6 sm:p-6 bg-slate-900 text-white font-lexend">
         <div className="max-w-2xl w-full space-y-6 sm:space-y-8 bg-slate-800 p-5 sm:p-10 rounded-3xl shadow-2xl border border-slate-700">
           <div className="text-center space-y-4">
+            <p className="text-xs sm:text-sm text-slate-500 tracking-wide font-medium">
+              {t('appBrandBanner')}
+            </p>
             <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
               {t('appTitle')}
             </h1>
@@ -1956,6 +1967,9 @@ const App: React.FC = () => {
         <div className="flex items-center gap-3 sm:gap-4 min-w-0">
           <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-xl italic shadow-inner">C</div>
           <div className="min-w-0">
+            <p className="text-[10px] sm:text-[11px] text-slate-500 truncate max-w-[70vw] sm:max-w-xl font-medium">
+              {t('appBrandBanner')}
+            </p>
             <h2 className="font-bold text-sm text-slate-400 uppercase tracking-widest">{t('debateArena')}</h2>
             <p className="text-base sm:text-lg font-bold truncate max-w-[55vw] sm:max-w-md">{session.topic}</p>
           </div>

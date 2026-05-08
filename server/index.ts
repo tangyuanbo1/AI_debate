@@ -1142,18 +1142,14 @@ app.post('/api/transcribe', async (_req, res) => {
   });
 });
 
-// ---- 语音合成 TTS（阿里云 Qwen3-TTS-Instruct-Flash，支持情感指令） ----
+// ---- 语音合成 TTS（阿里云 Qwen3-TTS-Flash；按 voice 区分辩手，避免 Instruct 指令把音色拉齐） ----
 const TTS_PATH = '/api/v1/services/aigc/multimodal-generation/generation';
 function dashscopeTtsUrl(): string {
   const base = globalConfig.dashscopeBaseUrl || 'https://dashscope.aliyuncs.com';
   return `${base}${TTS_PATH}`;
 }
 
-/**
- * 三位 AI 辩手：voice 须与当前 TTS model 的「支持的系统音色」表一致。
- * 使用 qwen3-tts-instruct-flash 时，勿选仅列在 Flash 行、未列 Instruct-Flash 行的音色（如 Sunny），否则会回退/异常。
- * 文档：https://help.aliyun.com/zh/model-studio/qwen-tts
- */
+/** 三位 AI 辩手：voice 为官方「支持的系统音色」表中 voice 列；文档见 https://help.aliyun.com/zh/model-studio/qwen-tts */
 const TTS_VOICE_BY_SPEAKER: Record<string, { voice: string; zhExtra?: string; enExtra?: string }> = {
   a1: { voice: 'Ethan', zhExtra: '男声（晨煦），阳光稳重，语速略快。', enExtra: 'Male voice, warm and steady, slightly fast.' },
   a2: { voice: 'Cherry', zhExtra: '女声（芊悦），阳光清晰。', enExtra: 'Female voice, bright and clear.' },
@@ -1177,19 +1173,17 @@ app.post('/api/tts', async (req, res) => {
       lang === 'zh-CN' ? true : lang === 'en-US' ? false : /[\u4e00-\u9fff]/.test(text);
     const languageType = isChinese ? 'Chinese' : 'English';
     const voiceCfg = speakerId && TTS_VOICE_BY_SPEAKER[speakerId] ? TTS_VOICE_BY_SPEAKER[speakerId] : null;
-    const instructions = isChinese
-      ? `本条语音内保持所选系统音色稳定、语气一致。语速比正常略快一点，吐字清晰；语气坚定、适合辩论，情绪起伏不要过大。${voiceCfg?.zhExtra ?? ''}`
-      : `Keep the selected system voice stable within this clip. Slightly faster than normal pace, clear articulation; firm persuasive debate tone, avoid large emotional swings. ${voiceCfg?.enExtra ?? ''}`;
+    if (!voiceCfg && speakerId) {
+      console.warn(`[TTS] 未知 speakerId=${String(speakerId)}，将使用默认音色 Cherry`);
+    }
 
+    // 使用 Flash 而非 Instruct：Instruct 的 instructions 易把多路音色「拉成」同一种辩论腔；Flash 仅按 voice 合成，区分度更稳。
     const ttsBody = {
-      model: 'qwen3-tts-instruct-flash',
+      model: 'qwen3-tts-flash',
       input: {
         text: text.trim().slice(0, 5000),
         voice: voiceCfg?.voice ?? 'Cherry',
         language_type: languageType,
-        instructions,
-        // 关闭后由固定指令主导，减少每句被「优化」成不同风格
-        optimize_instructions: false,
       },
     };
 

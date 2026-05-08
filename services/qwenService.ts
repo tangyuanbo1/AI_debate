@@ -141,8 +141,8 @@ let ttsRouteMissing = false;
 let ttsLoggedRouteMissing = false;
 let ttsLogged429Hint = false;
 
-/** 同时进行的合成请求数；遇 429/5xx 会在单句内退避重试，不必过小 */
-const TTS_MAX_CONCURRENT = 5;
+/** 同时进行的合成请求数；过大易触发 DashScope 429，且与多句预取叠加会放大限流 */
+const TTS_MAX_CONCURRENT = 2;
 let ttsInFlight = 0;
 const ttsWaitQueue: Array<() => void> = [];
 
@@ -183,10 +183,15 @@ export async function synthesizeSpeech(
 
     const maxAttempts = 10;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // 必须显式带上 speakerId 键：JSON.stringify 会省略值为 undefined 的字段，服务端会当成未传而全部用 Cherry
       const resp = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: trimmed, lang, speakerId: opts?.speakerId }),
+        body: JSON.stringify({
+          text: trimmed,
+          lang,
+          speakerId: typeof opts?.speakerId === 'string' ? opts.speakerId : null,
+        }),
       });
 
       if (resp.ok) {
