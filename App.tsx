@@ -152,6 +152,9 @@ const App: React.FC = () => {
         stopReading: '停止朗读',
         thinkingExpand: '思考过程（点击展开）',
         aiPreparingSpeech: '正在组织语言…',
+        interruptFlow: '打断',
+        interruptFlowHint:
+          '停止 AI 生成、语音播报与麦克风；结构化模式下结束当前 AI 回合以便继续发言（网络卡住时点）',
       },
       'en-US': {
         appBrandBanner: '稔知EVOVA-ClassMate',
@@ -272,6 +275,9 @@ const App: React.FC = () => {
         stopReading: 'Stop reading',
         thinkingExpand: 'Thinking (click to expand)',
         aiPreparingSpeech: 'Preparing…',
+        interruptFlow: 'Stop',
+        interruptFlowHint:
+          'Stop AI generation, TTS, and mic. In structured mode, ends the current AI turn so you can continue.',
       },
     };
 
@@ -516,6 +522,8 @@ const App: React.FC = () => {
   const ttsBrowserPlayRef = useRef<{ argId: string; sentences: string[]; nextToPlay: number; speakerId?: string } | null>(null);
   /** 本轮 TTS 全部播完后执行（如结构化回合再 +1 轮到学生） */
   const pendingTtsCompleteCallbackRef = useRef<(() => void) | null>(null);
+  /** 中止 /api/debate/stream，与「打断」按钮联动 */
+  const aiStreamAbortRef = useRef<AbortController | null>(null);
 
   const fireTtsPlaybackComplete = () => {
     const fn = pendingTtsCompleteCallbackRef.current;
@@ -928,6 +936,28 @@ const App: React.FC = () => {
     pendingTtsCompleteCallbackRef.current = null;
   };
 
+  /** 打断：中止流式生成、停止朗读与录音；结构化辩论若卡在 AI 回合则推进到下一发言位 */
+  const interruptAiFlow = () => {
+    aiStreamAbortRef.current?.abort();
+    aiStreamAbortRef.current = null;
+    stopTtsPlayback(false);
+    stopRecording();
+    disposeSpeechRecognition();
+    setIsTranscribing(false);
+    setIsAiThinking(false);
+    setThinkingAiSpeakerId(null);
+    setSpeakingArgId(null);
+    setTtsHighlightIndex(-1);
+
+    setSession((prev) => {
+      if (prev.mode !== 'structured') return prev;
+      const idx = prev.currentTurn;
+      if (idx < 0 || idx >= DEBATE_SEQUENCE.length) return prev;
+      if (!DEBATE_SEQUENCE[idx].debater.isAI) return prev;
+      return { ...prev, currentTurn: prev.currentTurn + 1 };
+    });
+  };
+
   const splitSentences = (text: string): string[] => {
     return text.split(/(?<=[。！？.!?])\s*/).filter((s) => s.trim() && /[。！？.!?]\s*$/.test(s.trim()));
   };
@@ -1218,6 +1248,8 @@ const App: React.FC = () => {
     setTtsHighlightIndex(-1);
     ttsQueueRef.current = null;
     try {
+      const ac = new AbortController();
+      aiStreamAbortRef.current = ac;
       const streamResponse = await generateDebateResponseStream(
         session.topic,
         responder.role,
@@ -1233,6 +1265,7 @@ const App: React.FC = () => {
             targetSide: 'PRO',
           },
         },
+        ac.signal,
       );
 
       const aiArgId = Math.random().toString(36).substr(2, 9);
@@ -1287,9 +1320,11 @@ const App: React.FC = () => {
         const toRead = (speech || fullText || '').trim();
         if (toRead) speakText(aiArgId, toRead, { speakerId: responder.id });
       }
-    } catch (error) {
-      console.error('AI Generation Error', error);
+    } catch (error: unknown) {
+      const aborted = error instanceof Error && error.name === 'AbortError';
+      if (!aborted) console.error('AI Generation Error', error);
     } finally {
+      aiStreamAbortRef.current = null;
       setIsAiThinking(false);
       setThinkingAiSpeakerId(null);
     }
@@ -1352,13 +1387,17 @@ const App: React.FC = () => {
     ttsQueueRef.current = null;
 
     try {
+      const ac = new AbortController();
+      aiStreamAbortRef.current = ac;
       const streamResponse = await generateDebateResponseStream(
         session.topic,
         step.debater.role,
         DebateSide.CON,
         currentHistory,
         lang,
-        { enabled: kbEnabled, selectedDocIds: kbSelectedDocIds, topK: 8, debug: kbDebug }
+        { enabled: kbEnabled, selectedDocIds: kbSelectedDocIds, topK: 8, debug: kbDebug },
+        undefined,
+        ac.signal,
       );
 
       const aiArgId = Math.random().toString(36).substr(2, 9);
@@ -1439,9 +1478,11 @@ const App: React.FC = () => {
         advanceStructuredTurn();
       }
 
-    } catch (error) {
-      console.error("AI Generation Error", error);
+    } catch (error: unknown) {
+      const aborted = error instanceof Error && error.name === 'AbortError';
+      if (!aborted) console.error('AI Generation Error', error);
     } finally {
+      aiStreamAbortRef.current = null;
       setThinkingAiSpeakerId(null);
       setIsAiThinking(false);
     }
@@ -2233,6 +2274,21 @@ const App: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-4">
+              {(isAiThinking ||
+                isRecording ||
+                isTranscribing ||
+                speakingArgId) && (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={interruptAiFlow}
+                    title={t('interruptFlowHint')}
+                    className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-900 font-black text-sm shadow-lg shadow-amber-900/25 active:scale-[0.98] border border-amber-400/30"
+                  >
+                    {t('interruptFlow')}
+                  </button>
+                </div>
+              )}
               {session.mode === 'structured' && currentStep ? (
                 <>
               <div className="flex justify-between items-center text-sm">
@@ -2311,15 +2367,23 @@ const App: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                <div className="bg-slate-800 border border-slate-700 rounded-2xl py-8 flex flex-col items-center justify-center gap-4">
+                <div className="bg-slate-800 border border-slate-700 rounded-2xl py-8 flex flex-col items-center justify-center gap-4 px-4">
                   <div className="flex gap-2">
                     <div className="w-2 h-2 bg-red-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
                     <div className="w-2 h-2 bg-red-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
                     <div className="w-2 h-2 bg-red-500 rounded-full animate-bounce"></div>
                   </div>
-                  <p className="text-slate-400 text-sm font-medium tracking-wide italic">
+                  <p className="text-slate-400 text-sm font-medium tracking-wide italic text-center">
                     {t('aiSynthesizing', { name: getDebaterName(currentStep.debater.id) })}
                   </p>
+                  <button
+                    type="button"
+                    onClick={interruptAiFlow}
+                    title={t('interruptFlowHint')}
+                    className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-900 font-black text-sm shadow-lg"
+                  >
+                    {t('interruptFlow')}
+                  </button>
                 </div>
               )}
                 </>

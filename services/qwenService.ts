@@ -49,7 +49,8 @@ export async function generateDebateResponseStream(
       targetSpeakerName?: string;
       targetSide?: 'PRO' | 'CON';
     };
-  }
+  },
+  signal?: AbortSignal
 ) {
   const resp = await fetch("/api/debate/stream", {
     method: "POST",
@@ -65,6 +66,7 @@ export async function generateDebateResponseStream(
       kb,
       ...extra,
     }),
+    signal,
   });
 
   if (!resp.ok) {
